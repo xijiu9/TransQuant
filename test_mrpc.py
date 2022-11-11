@@ -17,6 +17,7 @@ parser = argparse.ArgumentParser(description='test')
 parser.add_argument('--twolayers_gradweight', '--2gw', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
 parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
 parser.add_argument('--lsqforward', type=str2bool, default=False, help='apply LSQ')
+parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
 parser.add_argument('--training-bit', type=str, default='', help='weight number of bits',
                     choices=['exact', 'qat', 'all8bit', 'star_weight', 'only_weight', 'weight4', 'all4bit', 'forward8',
                              'forward4', 'plt'])
@@ -84,7 +85,7 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
           "--per_device_train_batch_size 32 --learning_rate 2e-5 --seed {} --num_train_epochs {} "
           "--output_dir ./test_glue_result_quantize/mrpc/quantize/seed={} --arch bertForSequence {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
-          "--2gw {} --2gi {}"
+          "--2gw {} --2gi {} --luq {}"
           .format(args.task, args.seed, args.epochs, args.seed, arg, argchoice,
                   bbits, bwbits, awbits, awbits,
-                  args.twolayers_gradweight, args.twolayers_gradinputt))
+                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq))

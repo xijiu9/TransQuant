@@ -3,9 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import math
 from torch.nn.parameter import Parameter
 from torch.autograd.function import InplaceFunction, Function
-from .preconditioner import ScalarPreconditioner, ScalarPreconditionerAct, lsq_per_tensor, TwoLayerWeightPreconditioner
+from .preconditioner import ScalarPreconditioner, ScalarPreconditionerAct, lsq_per_tensor, \
+    TwoLayerWeightPreconditioner, LUQPreconditioner
 from .utils import twolayer_linearsample_weight, twolayer_linearsample_input, checkNAN
 import IPython
 
@@ -29,6 +31,7 @@ class QuantizationConfig:
         self.lsqforward = False
         self.twolayers_gradweight = False
         self.twolayers_gradinputt = False
+        self.luq = False
 
     def activation_preconditioner(self):
         # return lambda x: ForwardPreconditioner(x, self.activation_num_bits)
@@ -44,12 +47,16 @@ class QuantizationConfig:
         return lambda x: ScalarPreconditioner(x, self.bias_num_bits)
 
     def activation_gradient_preconditioner(self, special=False):
+        if self.luq:
+            return lambda x: LUQPreconditioner(x, self.backward_num_bits)
         if self.twolayers_gradinputt and not special:
             return lambda x: TwoLayerWeightPreconditioner(x, self.backward_num_bits)
         else:
             return lambda x: ScalarPreconditioner(x, self.backward_num_bits)
 
     def weight_gradient_preconditioner(self, special=False):
+        if self.luq:
+            return lambda x: LUQPreconditioner(x, self.bweight_num_bits)
         if self.twolayers_gradweight and not special:
             return lambda x: TwoLayerWeightPreconditioner(x, self.bweight_num_bits)
         return lambda x: ScalarPreconditioner(x, self.bweight_num_bits)
@@ -86,6 +93,11 @@ class UniformQuantize(InplaceFunction):
             if stochastic:
                 noise = output.new(output.shape).uniform_(-0.5, 0.5)
                 output.add_(noise)
+                # print("quantize 2", output)
+                if qconfig.luq:
+                    log_bias = math.log(4 / 3) - 1 / 2
+                    output.add_(torch.ones_like(output) * log_bias)
+                    # print("quantize 3", output)
             # quantize
             output.clamp_(0.0, preconditioner.num_bins).round_()
 

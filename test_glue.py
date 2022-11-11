@@ -265,6 +265,7 @@ def parse_args():
                         help='use two 4 bit to simulate a 8 bit')
     parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False,
                         help='use two 4 bit to simulate a 8 bit')
+    parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
 
     #Todo:添加参数部分到此结束
     args = parser.parse_args()
@@ -303,6 +304,7 @@ def main():
     qconfig.lsqforward = args.lsqforward
     qconfig.twolayers_gradweight = args.twolayers_gradweight
     qconfig.twolayers_gradinputt = args.twolayers_gradinputt
+    qconfig.luq = args.luq
     init(args.batch_size)
 
     if args.amp and args.fp16:

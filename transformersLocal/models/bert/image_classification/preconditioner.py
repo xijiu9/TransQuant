@@ -4,6 +4,16 @@ import time
 import numpy as np
 
 
+def checkNAN(x, s=''):
+    N = torch.isnan(x)
+    cN = torch.count_nonzero(N)
+    if cN != 0:
+        print("NAN!!!{}".format(s))
+        print(cN)
+        print(x.shape)
+        print(x)
+
+
 def householder(src, tar):
     N = src.shape[0]
     v = tar - src
@@ -255,6 +265,109 @@ class lsq_per_tensor(torch.autograd.Function):
         # if config.epoch < config.freeze_step and inputtype == "activation":
         #     return grad_output * mask.float(), (grad_output * ss_gradient).sum() * config.epoch / config.freeze_step, None, None, None, None
         return grad_output * mask.float(), (grad_output * ss_gradient).sum(), None, None
+
+
+class LUQPreconditioner(Preconditioner):
+    # y = (x - z) * scale
+    # x = y / scale + z
+    def __init__(self, x, num_bits, left=True):
+        super(LUQPreconditioner, self).__init__(x, num_bits, left)
+
+    def transform(self, x):
+        # print(x.max(), x.min(), x.argmax(keepdim=False), x.argmin(keepdim=False))
+        # print(x[x.argmax() // x.shape[1] - 8: x.argmax() // x.shape[1] + 2,
+        #         x.argmax() % x.shape[1] - 5:x.argmax() % x.shape[1] + 5])
+        # print(x.argmax() // x.shape[1], x.argmax() % x.shape[1], x.shape[0], x.shape[1])
+        # print('_'*20)
+        self.debug = False
+
+        with torch.no_grad():
+
+            mx = x.abs().max()
+            self.max_bins = 2 ** (self.num_bits - 1)
+            alpha = mx / 2 ** self.max_bins
+
+            self.minivalue = 2 ** (-self.max_bins - 3)
+            self.num_bins = self.max_bins + 1
+            if self.debug:
+                print(mx, alpha)
+        if self.debug:
+            print(x)
+        sign = (x > 0)
+        sign11 = sign.int() * 2 - torch.ones_like(x)
+        if self.debug:
+            print("sign", sign)
+        thres = (x.abs() > alpha)
+        sample_prob = (~thres) * x.abs() / alpha
+        checkNAN(sample_prob, "sample prob")
+        prob = torch.bernoulli(sample_prob)
+        if self.debug:
+            print("prob", prob)
+        T = x * thres + sign11 * alpha * prob
+        self.mid_ckpt = T
+
+        self.alpha = alpha
+        #
+        if self.debug:
+            print("T", T)
+
+        output = T / alpha
+
+        if self.debug:
+            print("output", output)
+
+        checkNAN(output, "luq output before log")
+        logx, nearzero = self.log_with_0(output.abs())
+
+        self.sign11 = sign11
+        self.nearzero = nearzero
+        output = logx * ~nearzero
+
+        if self.debug:
+            print("output log", output)
+        checkNAN(output, "luq output after log")
+        return output
+
+    def log_with_0(self, x):
+        small = (x < self.minivalue)
+        small11 = small.int() * 2 - torch.ones_like(x)
+        if self.debug:
+            print("small", small)
+        x = x + small * self.minivalue
+        if self.debug:
+            print("small x", x)
+        logx = torch.log2(x) + torch.ones_like(x)
+        if self.debug:
+            print("logx", logx)
+        return logx, small
+
+    def exp_with_0(self, x, nearzero):
+        powx = torch.pow(2, x) / 2
+        if self.debug:
+            print("pow x", powx)
+        # print("nearzer0", nearzero)
+        x = powx * ~nearzero
+        if self.debug:
+            print("pow nearzero x", x)
+        return x
+
+    def inverse_transform(self, x):
+        if self.debug:
+            print("inverse x", x)
+
+        x = self.exp_with_0(x.abs(), self.nearzero) * self.sign11
+
+        if self.debug:
+            print("x", x)
+        checkNAN(x, "luq inverse x")
+        if self.debug:
+            print(x)
+        output = x * self.alpha
+
+        if self.debug:
+            print("final", output)
+
+        return output
 
 
 if __name__ == '__main__':
