@@ -199,11 +199,11 @@ class BertBuilder(object):
             print("invalid choice {}".format(choice))
             exit(0)
 
-    def linear(self, in_planes, out_planes):
-        return self.config['linear'](in_planes, out_planes)
+    def linear(self, in_planes, out_planes, name=''):
+        return self.config['linear'](in_planes, out_planes, name=name)
 
-    def identity(self):
-        return self.config['identity']()
+    def identity(self, name=''):
+        return self.config['identity'](name=name)
 
 
 class BertEmbeddings(nn.Module):
@@ -215,7 +215,7 @@ class BertEmbeddings(nn.Module):
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
-        self.identity = builder.identity()
+        self.identity = builder.identity(name="embedding")
         self.builder = builder
         # self.linear = builder.linear(config.hidden_size, config.hidden_size)
 
@@ -299,9 +299,9 @@ class BertSelfAttention(nn.Module):
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
         if builder.choice['attention']:
-            self.query = builder.linear(config.hidden_size, self.all_head_size)
-            self.key = builder.linear(config.hidden_size, self.all_head_size)
-            self.value = builder.linear(config.hidden_size, self.all_head_size)
+            self.query = builder.linear(config.hidden_size, self.all_head_size, name="attention")
+            self.key = builder.linear(config.hidden_size, self.all_head_size, name="attention")
+            self.value = builder.linear(config.hidden_size, self.all_head_size, name="attention")
         else:
             self.query = nn.Linear(config.hidden_size, self.all_head_size)
             self.key = nn.Linear(config.hidden_size, self.all_head_size)
@@ -421,7 +421,7 @@ class BertSelfOutput(nn.Module):
     def __init__(self, config, builder=None):
         super().__init__()
         if builder.choice['addNorm']:
-            self.dense = builder.linear(config.hidden_size, config.hidden_size)
+            self.dense = builder.linear(config.hidden_size, config.hidden_size, name="addNorm")
         else:
             self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -487,7 +487,7 @@ class BertIntermediate(nn.Module):
     def __init__(self, config, builder=None):
         super().__init__()
         if builder.choice['feedForward']:
-            self.dense = builder.linear(config.hidden_size, config.intermediate_size)
+            self.dense = builder.linear(config.hidden_size, config.intermediate_size, name='feedForward')
         else:
             self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
         if isinstance(config.hidden_act, str):
@@ -505,7 +505,7 @@ class BertOutput(nn.Module):
     def __init__(self, config, builder=None):
         super().__init__()
         if builder.choice['addNorm']:
-            self.dense = builder.linear(config.intermediate_size, config.hidden_size)
+            self.dense = builder.linear(config.intermediate_size, config.hidden_size, name='addNorm')
         else:
             self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -705,7 +705,7 @@ class BertPooler(nn.Module):
     def __init__(self, config, builder=None):
         super().__init__()
         if builder.choice['pooler']:
-            self.dense = builder.linear(config.hidden_size, config.hidden_size)
+            self.dense = builder.linear(config.hidden_size, config.hidden_size, name='pooler')
         else:
             self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
@@ -1575,7 +1575,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         )
         self.dropout = nn.Dropout(classifier_dropout)
         if builder.choice['classifier']:
-            self.classifier = builder.linear(config.hidden_size, config.num_labels)
+            self.classifier = builder.linear(config.hidden_size, config.num_labels, name='classifier')
         else:
             self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 

@@ -252,20 +252,26 @@ class identity_act(Function):
 
 
 class LSQPerTensor(nn.Module):
-    def __init__(self, bits, aw=''):
+    def __init__(self, bits, aw='', name=''):
         super(LSQPerTensor, self).__init__()
 
         self.aw = aw
         self.bits = bits
         self.step_size = Parameter(torch.tensor(1.0), requires_grad=True)
         self.initialized = False
+        self.name = name
 
     def forward(self, x):
         if not self.initialized:
             with torch.no_grad():
                 num_bins = 2 ** self.bits - 1
-                # step_size = 2 * x.abs().mean() / np.sqrt(num_bins)
-                step_size = 4 * x.abs().mean() / np.sqrt(num_bins)  # embedding
+                if self.name in ["attention", "addNorm", "feedForward", "pooler", "classifier"]:
+                    step_size = 2 * x.abs().mean() / np.sqrt(num_bins)
+                elif self.name == "embedding":
+                    step_size = 4 * x.abs().mean() / np.sqrt(num_bins)  # embedding
+                else:
+                    if name != '':
+                        print("?{}".format(name))
                 # step_size = x.abs().max() / num_bins
                 self.step_size.copy_(step_size)  # LSQ type
 
@@ -413,18 +419,18 @@ class QuantMeasure(nn.Module):
 class QLinear(nn.Linear):
     """docstring for QConv2d."""
 
-    def __init__(self, in_features, out_features, bias=True):
+    def __init__(self, in_features, out_features, bias=True, name=''):
         super(QLinear, self).__init__(in_features, out_features, bias)
         self.quantize_input = QuantMeasure()
         if qconfig.forward_method == 'LSQ':
-            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w')
-            self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, aw='a')
-        if qconfig.forward_method == 'LSQplus':
-            self.lsqweight = LSQplus(qconfig.weight_num_bits, aw='w')
-            self.lsqactive = LSQplus(qconfig.activation_num_bits, aw='a')
+            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
+            self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, aw='a', name=name)
+        elif qconfig.forward_method == 'LSQplus':
+            self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
+            self.lsqplusactive = LSQplus(qconfig.activation_num_bits, aw='a', name=name)
         elif qconfig.forward_method == 'SAWB':
-            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w')
-            self.SAWBactive = SAWBTensor(qconfig.activation_num_bits, aw='a')
+            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
+            self.SAWBactive = SAWBTensor(qconfig.activation_num_bits, aw='a', name=name)
 
     def forward(self, input):
         if qconfig.quantize_activation:
@@ -464,14 +470,14 @@ class QLinear(nn.Linear):
 # Todo:暂定为QEmbedding之后的线性补充层
 # 此处输入为embedding层的weight，需要按照weight的方式进行量化
 class QIdentity(nn.Identity):
-    def __init__(self):
+    def __init__(self, name=''):
         super(QIdentity, self).__init__()
         if qconfig.forward_method == 'LSQ':
-            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w')
-        if qconfig.forward_method == 'LSQplus':
-            self.lsqweight = LSQplus(qconfig.weight_num_bits, aw='w')
+            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
+        elif qconfig.forward_method == 'LSQplus':
+            self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
         elif qconfig.forward_method == 'SAWB':
-            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w')
+            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
 
     def forward(self, input):
         if qconfig.quantize_weights:
