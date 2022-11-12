@@ -16,12 +16,13 @@ def str2bool(v):
 parser = argparse.ArgumentParser(description='test')
 parser.add_argument('--twolayers_gradweight', '--2gw', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
 parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
-parser.add_argument('--lsqforward', type=str2bool, default=False, help='apply LSQ')
+parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
+                    choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
 parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
-parser.add_argument('--training-bit', type=str, default='', help='weight number of bits',
+parser.add_argument('--training-bit', type=str, default='', help='weight number of bits', required=True,
                     choices=['exact', 'qat', 'all8bit', 'star_weight', 'only_weight', 'weight4', 'all4bit', 'forward8',
                              'forward4', 'plt'])
-parser.add_argument('--choice', nargs='+', type=str, help='Choose a linear layer to quantize')
+parser.add_argument('--choice', nargs='+', type=str, required=True, help='Choose a linear layer to quantize')
 
 parser.add_argument('--training-strategy', default='scratch', type=str, metavar='strategy',
                     choices=['scratch', 'checkpoint', 'gradually', 'checkpoint_from_zero', 'checkpoint_full_precision'])
@@ -75,17 +76,26 @@ if args.twolayers_gradweight and args.twolayers_gradinputt:
 elif args.twolayers_gradweight and not args.twolayers_gradinputt:
     method = 'twolayer_weightonly'
 elif not args.twolayers_gradweight and not args.twolayers_gradinputt:
-    method = 'full'
+    method = args.training_bit
+    if args.luq:
+        method = 'luq'
+else:
+    method = 'unknown'
+    print("!"*1000)
 
 argchoice = ''
+arg_choice_without_space = ''
 for cho in args.choice:
     argchoice += cho + ' '
+    arg_choice_without_space += cho + '_'
+argchoice = argchoice[:-1]
     
 os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased --task_name {} --max_length 128 "
           "--per_device_train_batch_size 32 --learning_rate 2e-5 --seed {} --num_train_epochs {} "
-          "--output_dir ./test_glue_result_quantize/mrpc/quantize/seed={} --arch bertForSequence {} --choice {} "
+          "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch bertForSequence {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
-          "--2gw {} --2gi {} --luq {}"
-          .format(args.task, args.seed, args.epochs, args.seed, arg, argchoice,
+          "--2gw {} --2gi {} --luq {} --forward-method {}"
+          .format(args.task, args.seed, args.epochs,
+                  args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
                   bbits, bwbits, awbits, awbits,
-                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq))
+                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method))

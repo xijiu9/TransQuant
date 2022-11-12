@@ -138,11 +138,13 @@ class TwoLayerWeightPreconditioner(Preconditioner):
             print(qzero, iqzero, "qzero, iqzero")
 
         if iqzero <= 0:
-            torch.save(x, 'image_classification/ckpt/precon1x.pt')
+            torch.save(x, '/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/'
+                          'image_classification/ckpt/precon1x.pt')
+
             print("save for 1 <0")
             print("what are you doing")
             print("part 1 break, x is {}, iqzero is {} \n".format(x, iqzero))
-            exit(0)
+            # exit(0)
 
         if iqzero > 0:
             mx = (iqzero - self.num_bins) * mn / iqzero
@@ -186,7 +188,7 @@ class TwoLayerWeightPreconditioner(Preconditioner):
                        '/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/precon2x.pt')
             print("save for 2 <0 ")
             print("part 2 break, x is {}, iqzero is {} \n".format(x, iqzero))
-            exit(0)
+            # exit(0)
 
         if iqzero > 0:
             mx = (iqzero - self.num_bins) * mn / iqzero
@@ -231,7 +233,50 @@ class TwoLayerWeightPreconditioner(Preconditioner):
 class lsq_per_tensor(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, input, scale, bits, symm):
+    def forward(ctx, input, scale, bits, symm=None, rand=None):
+
+        num_bins = 2 ** bits - 1
+        bias = -num_bins / 2 if symm else 0
+        num_features = input.numel()
+        grad_scale = 1.0 / np.sqrt(num_features * num_bins)
+        # grad_scale = 1.0 / np.sqrt(num_features)
+        # symm means possibly negative
+
+        # Forward
+        eps = 1e-7
+        scale = scale + eps
+        transformed = input / scale - bias
+        vbar = torch.clamp(transformed, 0.0, num_bins).round()
+        quantized = (vbar + bias) * scale
+        if rand < 0.001:
+            print("vbar + bias", (vbar + bias).min(), (vbar + bias).max())
+            print("scale = {}, quantized".format(scale), quantized.min(), quantized.max())
+
+        # Step size gradient
+        error = vbar - transformed
+        mask = torch.logical_and(transformed >= 0, transformed <= num_bins)
+        case1 = (transformed < 0).float() * bias
+        case2 = mask.float() * error
+        case3 = (transformed > num_bins).float() * (bias + num_bins)
+        # TODO gradient scale might be too small, so optimizing without AdaGrad might be problematic...
+        ss_gradient = (case1 + case2 + case3) * grad_scale  # * 100 * scale
+        ctx.save_for_backward(mask, ss_gradient)
+        # ctx.others = config, inputtype
+        return quantized
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        mask, ss_gradient = ctx.saved_tensors
+        # config, inputtype = ctx.others
+        # if config.epoch < config.freeze_step and inputtype == "activation":
+        #     return grad_output * mask.float(), (grad_output * ss_gradient).sum() * config.epoch / config.freeze_step, None, None, None, None
+        return grad_output * mask.float(), (grad_output * ss_gradient).sum(), None, None, None
+
+class lsq_plus(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, input, scale, bits, symm=None):
+
         num_bins = 2 ** bits - 1
         bias = -num_bins / 2 if symm else 0
         num_features = input.numel()
@@ -265,7 +310,6 @@ class lsq_per_tensor(torch.autograd.Function):
         # if config.epoch < config.freeze_step and inputtype == "activation":
         #     return grad_output * mask.float(), (grad_output * ss_gradient).sum() * config.epoch / config.freeze_step, None, None, None, None
         return grad_output * mask.float(), (grad_output * ss_gradient).sum(), None, None
-
 
 class LUQPreconditioner(Preconditioner):
     # y = (x - z) * scale
@@ -374,4 +418,4 @@ if __name__ == '__main__':
     x = torch.load(
         "/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/precon1x.pt")
     print(x)
-    T = TwoLayerWeightPreconditioner(x, 4)
+    T = ScalarPreconditioner(x, 4)

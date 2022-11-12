@@ -6,7 +6,7 @@ import numpy as np
 import math
 from torch.nn.parameter import Parameter
 from torch.autograd.function import InplaceFunction, Function
-from .preconditioner import ScalarPreconditioner, ScalarPreconditionerAct, lsq_per_tensor, \
+from .preconditioner import ScalarPreconditioner, ScalarPreconditionerAct, lsq_per_tensor, lsq_plus, \
     TwoLayerWeightPreconditioner, LUQPreconditioner
 from .utils import twolayer_linearsample_weight, twolayer_linearsample_input, checkNAN
 import IPython
@@ -28,10 +28,10 @@ class QuantizationConfig:
         self.acts = None
         self.hadamard = False
         self.biprecision = True
-        self.lsqforward = False
         self.twolayers_gradweight = False
         self.twolayers_gradinputt = False
         self.luq = False
+        self.forward_method = 'PTQ'
 
     def activation_preconditioner(self):
         # return lambda x: ForwardPreconditioner(x, self.activation_num_bits)
@@ -145,6 +145,7 @@ class linear_act(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # print("grad output", grad_output)
         checkNAN(grad_output, "grad output")
         # torch.set_printoptions(profile="full", linewidth=160)
         # print("grad output", grad_output.shape)
@@ -218,6 +219,7 @@ class linear_act(Function):
         # print("shape of grad_weight is:", grad_weight.size())
         # print("shape of grad_bias is:", grad_bias.size())
         checkNAN(grad_input_transform, "grad input transform")
+        # print("grad_input_transform", grad_input_transform)
         return grad_input_transform, grad_weight, grad_bias
 
 
@@ -250,11 +252,60 @@ class identity_act(Function):
 
 
 class LSQPerTensor(nn.Module):
-    def __init__(self, bits, symm=True):
+    def __init__(self, bits, aw=''):
         super(LSQPerTensor, self).__init__()
+
+        self.aw = aw
         self.bits = bits
-        self.symm = symm
-        self.step_size = Parameter(torch.tensor(1.0), requires_grad=qconfig.lsqforward)
+        self.step_size = Parameter(torch.tensor(1.0), requires_grad=True)
+        self.initialized = False
+
+    def forward(self, x):
+        if not self.initialized:
+            with torch.no_grad():
+                num_bins = 2 ** self.bits - 1
+                # step_size = 2 * x.abs().mean() / np.sqrt(num_bins)
+                step_size = 4 * x.abs().mean() / np.sqrt(num_bins)  # embedding
+                # step_size = x.abs().max() / num_bins
+                self.step_size.copy_(step_size)  # LSQ type
+
+                self.initialized = True
+
+        if x.max() > -1e-8 and x.min() < 1e-8:
+            symm = True
+        elif x.max() > -1e-8 and x.min() > -1e-8:
+            symm = False
+        else:
+            print("min max not compatible for SAWB")
+            symm = None
+        rand = torch.rand(1)
+        if rand < 0.001:
+            print(self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
+        return lsq_per_tensor().apply(x, self.step_size, self.bits, symm, rand)
+
+    def quantize_MSE(self, input, scale, bits, symm):
+        num_bins = 2 ** bits - 1
+        bias = -num_bins / 2 if symm else 0
+
+        # Forward
+        eps = 1e-7
+        scale = scale + eps
+        transformed = input / scale - bias
+        vbar = torch.clamp(transformed, 0.0, num_bins).round()
+        quantized = (vbar + bias) * scale
+
+        MSE = (quantized - input).square().sum()
+        return MSE
+
+
+class LSQplus(nn.Module):
+    def __init__(self, bits, aw=''):
+        super(LSQplus, self).__init__()
+
+        self.aw = aw
+        self.bits = bits
+        self.step_size = Parameter(torch.tensor(1.0), requires_grad=True)
+        self.beta = Parameter(torch.tensor(1.0), requires_grad=True)
         self.initialized = False
 
     def forward(self, x):
@@ -265,7 +316,84 @@ class LSQPerTensor(nn.Module):
                 self.step_size.copy_(step_size)  # LSQ type
 
                 self.initialized = True
-        return lsq_per_tensor().apply(x, self.step_size, self.bits, self.symm)
+
+        if x.max() > -1e-8 and x.min() < 1e-8:
+            symm = True
+        elif x.max() > -1e-8 and x.min() > -1e-8:
+            symm = False
+        else:
+            print("min max not compatible for SAWB")
+            symm = None
+        # print(self.aw, (x.min() / x.max()).abs(), x.max(), x.min())
+        return lsq_per_tensor().apply(x, self.step_size, self.beta, self.bits, symm)
+
+    def quantize_MSE(self, input, scale, bits, symm):
+        num_bins = 2 ** bits - 1
+        bias = -num_bins / 2 if symm else 0
+
+        # Forward
+        eps = 1e-7
+        scale = scale + eps
+        transformed = input / scale - bias
+        vbar = torch.clamp(transformed, 0.0, num_bins).round()
+        quantized = (vbar + bias) * scale
+
+        MSE = (quantized - input).square().sum()
+        return MSE
+
+
+class UniformQuantizeSawb(InplaceFunction):
+
+    @staticmethod
+    def forward(ctx, input, c1, c2, Qp, Qn):
+        output = input.clone()
+
+        with torch.no_grad():
+            clip = (c1 * torch.sqrt(torch.mean(input ** 2))) + (c2 * torch.mean(input.abs()))
+            scale = 2 * clip / (Qp - Qn)
+            output.div_(scale)
+            output.clamp_(Qn, Qp).round_()
+            output.mul_(scale)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # straight-through estimator
+        grad_input = grad_output
+        return grad_input, None, None, None, None
+
+
+def get_sawb_coefficients(bits):
+    bits = int(bits)
+    coefficient_dict = {1: [0., 1.], 2: [3.19, -2.14], 3: [7.40, -6.66], 4: [11.86, -11.68],
+                        5: [17.08, -17.66], 6: [22.49, -23.95], 7: [28.68, -31.24],
+                        8: [32.27, -35.46], 16: [34.26, -37.60], 32: [40.60, -45.33]}
+    return coefficient_dict[bits]
+
+
+class SAWBTensor(nn.Module):
+    """docstring for QuantMeasure."""
+
+    def __init__(self, bits=8, aw=''):
+        super(SAWBTensor, self).__init__()
+
+        self.aw = aw
+        self.bits = bits
+        self.c1, self.c2 = get_sawb_coefficients(self.bits)
+
+    def forward(self, input):
+        if input.max() > -1e-8 and input.min() < 1e-8:
+            Qn = -2 ** (self.bits - 1)
+            Qp = 2 ** (self.bits - 1)
+        elif input.max() > -1e-8 and input.min() > -1e-8:
+            Qn = 0
+            Qp = 2 ** self.bits - 1
+        else:
+            print("min max not compatible for SAWB")
+            Qn = 0
+            Qp = 0
+
+        return UniformQuantizeSawb().apply(input, self.c1, self.c2, Qp, Qn)
 
 
 class QuantMeasure(nn.Module):
@@ -285,27 +413,38 @@ class QuantMeasure(nn.Module):
 class QLinear(nn.Linear):
     """docstring for QConv2d."""
 
-    def __init__(self, in_features, out_features, bias=True, symm=True):
+    def __init__(self, in_features, out_features, bias=True):
         super(QLinear, self).__init__(in_features, out_features, bias)
         self.quantize_input = QuantMeasure()
-        if qconfig.lsqforward:
-            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, symm)
-            self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, symm)
+        if qconfig.forward_method == 'LSQ':
+            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w')
+            self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, aw='a')
+        if qconfig.forward_method == 'LSQplus':
+            self.lsqweight = LSQplus(qconfig.weight_num_bits, aw='w')
+            self.lsqactive = LSQplus(qconfig.activation_num_bits, aw='a')
+        elif qconfig.forward_method == 'SAWB':
+            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w')
+            self.SAWBactive = SAWBTensor(qconfig.activation_num_bits, aw='a')
 
     def forward(self, input):
         if qconfig.quantize_activation:
-            if qconfig.lsqforward:
+            if qconfig.forward_method == 'LSQ':
                 qinput = self.lsqactive(input)
+            elif qconfig.forward_method == 'SAWB':
+                qinput = self.SAWBactive(input)
             else:
                 qinput = self.quantize_input(input)
         else:
             qinput = input
 
         if qconfig.quantize_weights:
-            if qconfig.lsqforward:
+            if qconfig.forward_method == 'LSQ':
                 qweight = self.lsqweight(self.weight)
+            elif qconfig.forward_method == 'SAWB':
+                qweight = self.SAWBweight(self.weight)
             else:
                 qweight = quantize(self.weight, qconfig.weight_preconditioner())
+
             if self.bias is not None:
                 qbias = quantize(self.bias, qconfig.bias_preconditioner())
             else:
@@ -325,15 +464,21 @@ class QLinear(nn.Linear):
 # Todo:暂定为QEmbedding之后的线性补充层
 # 此处输入为embedding层的weight，需要按照weight的方式进行量化
 class QIdentity(nn.Identity):
-    def __init__(self, symm=True):
-        super(QIdentity, self).__init__(symm)
-        if qconfig.lsqforward:
-            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, symm)
+    def __init__(self):
+        super(QIdentity, self).__init__()
+        if qconfig.forward_method == 'LSQ':
+            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w')
+        if qconfig.forward_method == 'LSQplus':
+            self.lsqweight = LSQplus(qconfig.weight_num_bits, aw='w')
+        elif qconfig.forward_method == 'SAWB':
+            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w')
 
     def forward(self, input):
         if qconfig.quantize_weights:
-            if qconfig.lsqforward:
+            if qconfig.forward_method == 'LSQ':
                 qinput = self.lsqweight(input)
+            elif qconfig.forward_method == 'SAWB':
+                qinput = self.SAWBweight(input)
             else:
                 qinput = quantize(input, qconfig.weight_preconditioner())
         else:
@@ -345,50 +490,6 @@ class QIdentity(nn.Identity):
             output = identity_act.apply(qinput)
 
         return output
-
-
-class QBatchNorm2D(nn.BatchNorm2d):
-    def __init__(self, num_features):
-        super(QBatchNorm2D, self).__init__(num_features)
-        self.quantize_input = QuantMeasure()
-
-    def forward(self, input):  # TODO: weight is not quantized
-        self._check_input_dim(input)
-        if qconfig.quantize_activation:
-            qinput = self.quantize_input(input)
-        else:
-            qinput = input
-
-        # if config.quantize_weights:
-        #     qweight = quantize(self.weight, config.bias_preconditioner())
-        #     qbias = quantize(self.bias, config.bias_preconditioner())
-        # else:
-        #     qweight = self.weight
-        #     qbias = self.bias
-
-        qweight = self.weight
-        qbias = self.bias
-
-        # exponential_average_factor is set to self.momentum
-        # (when it is available) only so that if gets updated
-        # in ONNX graph when this node is exported to ONNX.
-        if self.momentum is None:
-            exponential_average_factor = 0.0
-        else:
-            exponential_average_factor = self.momentum
-
-        if self.training and self.track_running_stats:
-            if self.num_batches_tracked is not None:
-                self.num_batches_tracked = self.num_batches_tracked + 1
-                if self.momentum is None:  # use cumulative moving average
-                    exponential_average_factor = 1.0 / float(self.num_batches_tracked)
-                else:  # use exponential moving average
-                    exponential_average_factor = self.momentum
-
-        return F.batch_norm(
-            input, self.running_mean, self.running_var, qweight, qbias,
-            self.training or not self.track_running_stats,
-            exponential_average_factor, self.eps)
 
 
 if __name__ == '__main__':

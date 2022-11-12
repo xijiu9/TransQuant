@@ -260,12 +260,13 @@ def parse_args():
     parser.add_argument('--persample', type=str2bool, default=False, help='per-sample quantization of gradients')
     parser.add_argument('--hadamard', type=str2bool, default=False, help='apply Hadamard transformation on gradients')
     parser.add_argument('--biprecision', type=str2bool, default=True, help='Gradient bifurcation')
-    parser.add_argument('--lsqforward', type=str2bool, default=False, help='apply LSQ')
     parser.add_argument('--twolayers_gradweight', '--2gw', type=str2bool, default=False,
                         help='use two 4 bit to simulate a 8 bit')
     parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False,
                         help='use two 4 bit to simulate a 8 bit')
     parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
+    parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
+                        choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
 
     #Todo:添加参数部分到此结束
     args = parser.parse_args()
@@ -301,10 +302,10 @@ def main():
     qconfig.hadamard = args.hadamard
     qconfig.biased = args.biased
     qconfig.biprecision = args.biprecision
-    qconfig.lsqforward = args.lsqforward
     qconfig.twolayers_gradweight = args.twolayers_gradweight
     qconfig.twolayers_gradinputt = args.twolayers_gradinputt
     qconfig.luq = args.luq
+    qconfig.forward_method = args.forward_method
     init(args.batch_size)
 
     if args.amp and args.fp16:
