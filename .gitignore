@@ -1,0 +1,14 @@
+# 忽略一些没有必要的文件
+/bert-chinese/*
+/datasets/*
+/pytorch_quantization/*
+/quant_two_layer_xihaocheng/*
+/StatQuant-cjf/*
+/test_trainer/*
+/transformers/*
+/tutorial*.py
+
+/bert-glue/test_glue/*
+/bert-glue/tmp/*
+/bert-glue/run_*
+*.pt

@@ -22,6 +22,7 @@ parser.add_argument('--luq', type=str2bool, default=False, help='use luq for bac
 parser.add_argument('--training-bit', type=str, default='', help='weight number of bits', required=True,
                     choices=['exact', 'qat', 'all8bit', 'star_weight', 'only_weight', 'weight4', 'all4bit', 'forward8',
                              'forward4', 'plt'])
+parser.add_argument('--plt-bit', type=str, default='', help='')
 parser.add_argument('--choice', nargs='+', type=str, required=True, help='Choose a linear layer to quantize')
 
 parser.add_argument('--training-strategy', default='scratch', type=str, metavar='strategy',
@@ -34,37 +35,43 @@ parser.add_argument('--weight-decay', default=1e-4, type=float, metavar='N',
 
 parser.add_argument('--task', type=str, default='mrpc', help='apply LSQ')
 parser.add_argument('--seed', type=int, default=27, help='apply LSQ')
+parser.add_argument(
+    "--per_device_train_batch_size",
+    type=int,
+    default=32,
+    help="Batch size (per device) for the training dataloader.",
+)
 
 args = parser.parse_args()
 
 
 arg = " -c quantize --qa=True --qw=True --qg=True --persample=False --hadamard=False"
 if args.training_bit == 'all8bit':
-    bbits, bwbits, awbits = 8, 8, 8
+    bbits, bwbits, abits, wbits = 8, 8, 8, 8
 elif args.training_bit == 'exact':
     arg = ''
-    bbits, bwbits, awbits = 0, 0, 0
+    bbits, bwbits, abits, wbits = 0, 0, 0, 0
 elif args.training_bit == 'qat':
-    bbits, bwbits, awbits = 0, 0, 8
+    bbits, bwbits, abits, wbits = 0, 0, 8, 9
     arg = "-c quantize --qa=True --qw=True --qg=False"
 elif args.training_bit == 'star_weight':
-    bbits, bwbits, awbits = 8, 4, 4
+    bbits, bwbits, abits, wbits = 8, 4, 4, 4
 elif args.training_bit == 'only_weight':
-    bbits, bwbits, awbits = 8, 4, 8
+    bbits, bwbits, abits, wbits = 8, 4, 8, 8
     arg = "-c quantize --qa=False --qw=False --qg=True"
 elif args.training_bit == 'weight4':
-    bbits, bwbits, awbits = 8, 4, 8
+    bbits, bwbits, abits, wbits = 8, 4, 8, 8
 elif args.training_bit == 'all4bit':
-    bbits, bwbits, awbits = 4, 4, 4
+    bbits, bwbits, abits, wbits = 4, 4, 4, 4
 elif args.training_bit == 'forward8':
-    bbits, bwbits, awbits = 4, 4, 8
+    bbits, bwbits, abits, wbits = 4, 4, 8, 8
 elif args.training_bit == 'forward4':
-    bbits, bwbits, awbits = 8, 8, 4
+    bbits, bwbits, abits, wbits = 8, 8, 4, 4
 else:
-    bbits, bwbits, awbits = 0, 0, 0
+    bbits, bwbits, abits, wbits = 0, 0, 0, 0
     if args.training_bit == 'plt':
         arg = "-c quantize --qa={} --qw={} --qg={}".format(args.plt_bit[0], args.plt_bit[1], args.plt_bit[2])
-        bbits, bwbits, awbits = args.plt_bit[5], args.plt_bit[4], args.plt_bit[3]
+        bbits, bwbits, abits, wbits = args.plt_bit[6], args.plt_bit[5], args.plt_bit[3], args.plt_bit[4]
 
 if args.twolayers_gradweight:
     assert bwbits == 4
@@ -91,11 +98,11 @@ for cho in args.choice:
 argchoice = argchoice[:-1]
     
 os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased --task_name {} --max_length 128 "
-          "--per_device_train_batch_size 32 --learning_rate 2e-5 --seed {} --num_train_epochs {} "
+          "--per_device_train_batch_size {} --learning_rate 2e-5 --seed {} --num_train_epochs {} "
           "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch bertForSequence {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
           "--2gw {} --2gi {} --luq {} --forward-method {}"
-          .format(args.task, args.seed, args.epochs,
+          .format(args.task, args.per_device_train_batch_size, args.seed, args.epochs,
                   args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
-                  bbits, bwbits, awbits, awbits,
+                  bbits, bwbits, abits, wbits,
                   args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method))

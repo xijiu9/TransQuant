@@ -272,10 +272,11 @@ class lsq_per_tensor(torch.autograd.Function):
         #     return grad_output * mask.float(), (grad_output * ss_gradient).sum() * config.epoch / config.freeze_step, None, None, None, None
         return grad_output * mask.float(), (grad_output * ss_gradient).sum(), None, None, None
 
+
 class lsq_plus(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, input, scale, bits, symm=None):
+    def forward(ctx, input, scale, beta, bits, symm=None, aw='', rand=None):
 
         num_bins = 2 ** bits - 1
         bias = -num_bins / 2 if symm else 0
@@ -287,9 +288,12 @@ class lsq_plus(torch.autograd.Function):
         # Forward
         eps = 1e-7
         scale = scale + eps
-        transformed = input / scale - bias
+        transformed = (input - beta) / scale - bias
         vbar = torch.clamp(transformed, 0.0, num_bins).round()
-        quantized = (vbar + bias) * scale
+        quantized = (vbar + bias) * scale + beta
+        if rand < 0.001:
+            print("vbar + bias", (vbar + bias).min(), (vbar + bias).max())
+            print("scale = {}, quantized".format(scale), quantized.min(), quantized.max())
 
         # Step size gradient
         error = vbar - transformed
@@ -299,17 +303,27 @@ class lsq_plus(torch.autograd.Function):
         case3 = (transformed > num_bins).float() * (bias + num_bins)
         # TODO gradient scale might be too small, so optimizing without AdaGrad might be problematic...
         ss_gradient = (case1 + case2 + case3) * grad_scale  # * 100 * scale
-        ctx.save_for_backward(mask, ss_gradient)
+        bb_gradient = (~mask).float() * grad_scale
+        ctx.save_for_backward(mask, ss_gradient, bb_gradient)
+        ctx.aw = aw
         # ctx.others = config, inputtype
+
+        del case1, case2, case3, transformed, mask, ss_gradient, bb_gradient, vbar, rand, error
         return quantized
 
     @staticmethod
     def backward(ctx, grad_output):
-        mask, ss_gradient = ctx.saved_tensors
+        mask, ss_gradient, bb_gradient = ctx.saved_tensors
+        aw = ctx.aw
         # config, inputtype = ctx.others
         # if config.epoch < config.freeze_step and inputtype == "activation":
         #     return grad_output * mask.float(), (grad_output * ss_gradient).sum() * config.epoch / config.freeze_step, None, None, None, None
-        return grad_output * mask.float(), (grad_output * ss_gradient).sum(), None, None
+        grad_scale = (grad_output * ss_gradient).sum()
+        if aw == 'a':
+            grad_beta = (grad_output * bb_gradient).sum()
+        else:
+            grad_beta = None
+        return grad_output * mask.float(), grad_scale, grad_beta, None, None, None, None
 
 class LUQPreconditioner(Preconditioner):
     # y = (x - z) * scale
