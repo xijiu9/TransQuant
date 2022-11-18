@@ -40,6 +40,8 @@ class QuantizationConfig:
         self.twolayers_gradinputt = False
         self.luq = False
         self.forward_method = 'PTQ'
+        self.cutood = None
+        self.choice = None
 
     def activation_preconditioner(self):
         # return lambda x: ForwardPreconditioner(x, self.activation_num_bits)
@@ -295,8 +297,8 @@ class LSQPerTensor(nn.Module):
             print("min max not compatible for SAWB")
             symm = None
         rand = torch.rand(1)
-        if rand < 0.001:
-            print(self.name, self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
+        # if rand < 0.001:
+        #     print(self.name, self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
         return lsq_per_tensor().apply(x, self.step_size, self.bits, symm, rand)
 
 
@@ -347,8 +349,8 @@ class LSQplus(nn.Module):
             print("min max not compatible for SAWB")
             symm = None
         rand = torch.rand(1)
-        if rand < 0.001:
-            print(self.name, self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
+        # if rand < 0.001:
+        #     print(self.name, self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
         return lsq_plus().apply(x, self.step_size, self.beta, self.bits, symm, self.aw, rand)
 
     def quantize_MSE(self, input, scale, bits, symm):
@@ -442,28 +444,34 @@ class QLinear(nn.Linear):
         super(QLinear, self).__init__(in_features, out_features, bias)
         self.quantize_input = QuantMeasure()
         self.name = name
-        if qconfig.forward_method == 'LSQ':
-            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
-            self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, aw='a', name=name)
-        elif qconfig.forward_method == 'LSQplus':
-            self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
-            self.lsqplusactive = LSQplus(qconfig.activation_num_bits, aw='a', name=name)
-        elif qconfig.forward_method == 'SAWB':
-            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
-            self.SAWBactive = SAWBTensor(qconfig.activation_num_bits, aw='a', name=name)
+        if name in qconfig.choice or qconfig.choice[0] in ['quantize', 'linear']:
+            if qconfig.forward_method == 'LSQ':
+                self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
+                self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, aw='a', name=name)
+            elif qconfig.forward_method == 'LSQplus':
+                self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
+                self.lsqplusactive = LSQplus(qconfig.activation_num_bits, aw='a', name=name)
+            elif qconfig.forward_method == 'SAWB':
+                self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
+                self.SAWBactive = SAWBTensor(qconfig.activation_num_bits, aw='a', name=name)
+        self.first_pass = False
 
     def forward(self, input):
-        input_sort = torch.sort(input.flatten())[0]
-        max_thres, min_thres = input_sort[-len(input_sort) // 1000], input_sort[len(input_sort) // 1000]
-        input[input > max_thres] = max_thres
-        input[input < min_thres] = min_thres
-        # path = os.path.join("/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/"
-        #                     "image_classification/ckpt", qconfig.forward_method, self.name)
-        # os.makedirs(path, exist_ok=True)
-        # num_files = len(os.listdir(path))
-        # if num_files < 10:
-        #     torch.save([input, self.weight], os.path.join(path, '{}_{}.pt'.format(self.name, num_files)))
-        #     print(self.name, (input.max() / input.min()).abs(), input.max(), input.min())
+        if not self.first_pass:
+            print("Actually Using QLinear!")
+            self.first_pass = True
+
+        if qconfig.cutood != 0:
+            input_sort = torch.sort(input.flatten())[0]
+            max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
+            input[input > max_thres] = max_thres
+            input[input < min_thres] = min_thres
+            path = os.path.join("/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt", qconfig.forward_method, str(qconfig.cutood), self.name)
+            os.makedirs(path, exist_ok=True)
+            num_files = len(os.listdir(path))
+            if num_files < 10:
+                torch.save([input, self.weight], os.path.join(path, '{}_{}.pt'.format(self.name, num_files)))
+                print(self.name, (input.max() / input.min()).abs(), input.max(), input.min())
 
         if qconfig.quantize_activation:
             if qconfig.forward_method == 'LSQ':
@@ -509,21 +517,31 @@ class QIdentity(nn.Identity):
     def __init__(self, name=''):
         self.name = name
         super(QIdentity, self).__init__()
-        if qconfig.forward_method == 'LSQ':
-            self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
-        elif qconfig.forward_method == 'LSQplus':
-            self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
-        elif qconfig.forward_method == 'SAWB':
-            self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
-
+        if name in qconfig.choice or qconfig.choice[0] in ['quantize']:
+            if qconfig.forward_method == 'LSQ':
+                self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
+            elif qconfig.forward_method == 'LSQplus':
+                self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
+            elif qconfig.forward_method == 'SAWB':
+                self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
+        self.first_pass = False
+        
     def forward(self, input):
-        path = os.path.join("/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/"
-                            "image_classification/ckpt", qconfig.forward_method, self.name)
-        os.makedirs(path, exist_ok=True)
-        num_files = len(os.listdir(path))
-        if num_files < 10:
-            torch.save([None, input], os.path.join(path, '{}_{}.pt'.format(self.name, num_files)))
-            print(self.name, (input.max() / input.min()).abs(), input.max(), input.min())
+        if not self.first_pass:
+            print("Actually Using QIdentity!")
+            self.first_pass = True
+        if qconfig.cutood != 0:
+            input_sort = torch.sort(input.flatten())[0]
+            max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
+            input[input > max_thres] = max_thres
+            input[input < min_thres] = min_thres
+            path = os.path.join("/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt", qconfig.forward_method, str(qconfig.cutood), self.name)
+            os.makedirs(path, exist_ok=True)
+            num_files = len(os.listdir(path))
+            if num_files < 10:
+                torch.save([None, input], os.path.join(path, '{}_{}.pt'.format(self.name, num_files)))
+                print(self.name, (input.max() / input.min()).abs(), input.max(), input.min())
+
 
         if qconfig.quantize_weights:
             if qconfig.forward_method == 'LSQ':
@@ -546,7 +564,7 @@ class QIdentity(nn.Identity):
 
 
 if __name__ == '__main__':
-    load_path = "./ckpt/PTQ"
+    load_path = os.path.join("./ckpt/PTQ", str(500))
     for name in ["embedding", "attention", "addNorm", "feedForward", "pooler", "classifier"]:
         load_path_1 = os.path.join(load_path, name)
         os.makedirs(os.path.join(load_path_1, 'plt'), exist_ok=True)
@@ -611,6 +629,6 @@ if __name__ == '__main__':
                 draw(input_np, "input_clip")
                 find_mse(input_np, name=name)
                 print('*'*20)
-            # if weight is not None:
-            #     draw(weight.cpu().detach().numpy().flatten(), "weight")
+            if weight is not None:
+                draw(weight.cpu().detach().numpy().flatten(), "weight")
 

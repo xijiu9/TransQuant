@@ -138,12 +138,11 @@ class TwoLayerWeightPreconditioner(Preconditioner):
             print(qzero, iqzero, "qzero, iqzero")
 
         if iqzero <= 0:
-            torch.save(x, '/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/'
-                          'image_classification/ckpt/precon1x.pt')
+            torch.save(x, '/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt/precon1x.pt')
 
             print("save for 1 <0")
-            print("what are you doing")
-            print("part 1 break, x is {}, iqzero is {} \n".format(x, iqzero))
+            # print("what are you doing")
+            # print("part 1 break, x is {}, iqzero is {} \n".format(x, iqzero))
             # exit(0)
 
         if iqzero > 0:
@@ -159,7 +158,7 @@ class TwoLayerWeightPreconditioner(Preconditioner):
         if torch.isnan(self.scale1):
             print("save for 1 nan not save yet")
             torch.save(x,
-                       '/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/precon1x.pt')
+                       '/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt/precon1x.pt')
             print("save for 1 nan")
             exit(0)
 
@@ -185,9 +184,9 @@ class TwoLayerWeightPreconditioner(Preconditioner):
 
         if iqzero <= 0:
             torch.save(x,
-                       '/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/precon2x.pt')
+                       '/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt/precon2x.pt')
             print("save for 2 <0 ")
-            print("part 2 break, x is {}, iqzero is {} \n".format(x, iqzero))
+            # print("part 2 break, x is {}, iqzero is {} \n".format(x, iqzero))
             # exit(0)
 
         if iqzero > 0:
@@ -198,7 +197,7 @@ class TwoLayerWeightPreconditioner(Preconditioner):
 
         if torch.isnan(self.scale2):
             torch.save(x,
-                       '/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/precon2x.pt')
+                       '/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt/precon2x.pt')
             print("save for 2 nan")
             exit(0)
 
@@ -248,9 +247,9 @@ class lsq_per_tensor(torch.autograd.Function):
         transformed = input / scale - bias
         vbar = torch.clamp(transformed, 0.0, num_bins).round()
         quantized = (vbar + bias) * scale
-        if rand < 0.001:
-            print("vbar + bias", (vbar + bias).min(), (vbar + bias).max())
-            print("scale = {}, quantized".format(scale), quantized.min(), quantized.max())
+        # if rand < 0.001:
+        #     print("vbar + bias", (vbar + bias).min(), (vbar + bias).max())
+        #     print("scale = {}, quantized".format(scale), quantized.min(), quantized.max())
 
         # Step size gradient
         error = vbar - transformed
@@ -291,9 +290,9 @@ class lsq_plus(torch.autograd.Function):
         transformed = (input - beta) / scale - bias
         vbar = torch.clamp(transformed, 0.0, num_bins).round()
         quantized = (vbar + bias) * scale + beta
-        if rand < 0.001:
-            print("vbar + bias", (vbar + bias).min(), (vbar + bias).max())
-            print("scale = {}, quantized".format(scale), quantized.min(), quantized.max())
+        # if rand < 0.001:
+        #     print("vbar + bias", (vbar + bias).min(), (vbar + bias).max())
+        #     print("scale = {}, quantized".format(scale), quantized.min(), quantized.max())
 
         # Step size gradient
         error = vbar - transformed
@@ -430,6 +429,6 @@ class LUQPreconditioner(Preconditioner):
 
 if __name__ == '__main__':
     x = torch.load(
-        "/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/precon1x.pt")
+        "/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt/precon1x.pt")
     print(x)
     T = ScalarPreconditioner(x, 4)

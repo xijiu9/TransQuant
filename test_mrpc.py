@@ -35,12 +35,9 @@ parser.add_argument('--weight-decay', default=1e-4, type=float, metavar='N',
 
 parser.add_argument('--task', type=str, default='mrpc', help='apply LSQ')
 parser.add_argument('--seed', type=int, default=27, help='apply LSQ')
-parser.add_argument(
-    "--per_device_train_batch_size",
-    type=int,
-    default=32,
-    help="Batch size (per device) for the training dataloader.",
-)
+parser.add_argument("--per_device_train_batch_size", type=int, default=32, help="Batch size (per device) for the training dataloader.",)
+
+parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
 
 args = parser.parse_args()
 
@@ -96,13 +93,15 @@ for cho in args.choice:
     argchoice += cho + ' '
     arg_choice_without_space += cho + '_'
 argchoice = argchoice[:-1]
-    
+
+def op_None(x):
+    return "None" if x is None else x
 os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased --task_name {} --max_length 128 "
           "--per_device_train_batch_size {} --learning_rate 2e-5 --seed {} --num_train_epochs {} "
-          "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch bertForSequence {} --choice {} "
+          "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch BertForSequenceClassification {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
-          "--2gw {} --2gi {} --luq {} --forward-method {}"
+          "--2gw {} --2gi {} --luq {} --forward-method {} --cutood {}"
           .format(args.task, args.per_device_train_batch_size, args.seed, args.epochs,
                   args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
                   bbits, bwbits, abits, wbits,
-                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method))
+                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method, args.cutood))

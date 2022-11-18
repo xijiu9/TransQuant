@@ -218,21 +218,6 @@ def parse_args():
                         help='model configs: ' +
                         ' | '.join(model_configs) + '(default: classic)')
 
-    parser.add_argument('-b', '--batch-size', default=64, type=int,
-                        metavar='N', help='mini-batch size (default: 256) per gpu')
-
-    parser.add_argument('--amp', action='store_true',
-                        help='Run model AMP (automatic mixed precision) mode.')
-
-    parser.add_argument('--static-loss-scale', type=float, default=1,
-                        help='Static loss scale, positive power of 2 values can improve fp16 convergence.')
-
-    parser.add_argument('--resume', default='', type=str, metavar='PATH',
-                        help='path to latest checkpoint (default: none)')
-
-    parser.add_argument('--fp16', action='store_true',
-                        help='Run model fp16 mode.')
-
     #选择哪个层进行量化
     #classic(都不量化), embedding(填充层), attention, addNorm, feedForward, pooler, classifier, linear(量化全部线性层), quantize(以上所有)
 
@@ -247,6 +232,7 @@ def parse_args():
             return False
         else:
             raise argparse.ArgumentTypeError('Boolean value expected.')
+
 
     parser.add_argument('--qa', type=str2bool, default=True, help='quantize activation')
     parser.add_argument('--qw', type=str2bool, default=True, help='quantize weights')
@@ -267,6 +253,7 @@ def parse_args():
     parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
     parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
                         choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
+    parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
 
     #Todo:添加参数部分到此结束
     args = parser.parse_args()
@@ -306,18 +293,9 @@ def main():
     qconfig.twolayers_gradinputt = args.twolayers_gradinputt
     qconfig.luq = args.luq
     qconfig.forward_method = args.forward_method
-    init(args.batch_size)
+    qconfig.cutood = args.cutood
+    qconfig.choice = args.choice
 
-    if args.amp and args.fp16:
-        print("Please use only one of the --fp16/--amp flags")
-        exit(1)
-
-    if args.fp16:
-        assert torch.backends.cudnn.enabled, "fp16 mode requires cudnn backend to be enabled."
-
-    if args.static_loss_scale != 1.0:
-        if not args.fp16:
-            print("Warning:  if --fp16 is not used, static_loss_scale will be ignored.")
 
     # if args.optimizer_batch_size < 0:
     #     batch_size_multiplier = 1
@@ -337,23 +315,7 @@ def main():
     #         print("=> no pretrained weights found at '{}'".format(args.resume))
 
     # optionally resume from a checkpoint
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume, map_location = lambda storage, loc: storage.cuda(args.gpu))
-            args.start_epoch = checkpoint['epoch']
-            best_prec1 = checkpoint['best_prec1']
-            model_state = checkpoint['state_dict']
-            optimizer_state = checkpoint['optimizer']
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
-            model_state = None
-            optimizer_state = None
-    else:
-        model_state = None
-        optimizer_state = None
+
     #Todo:end of add something
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
@@ -719,6 +681,7 @@ def main():
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
+
             if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()

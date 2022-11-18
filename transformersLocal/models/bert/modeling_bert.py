@@ -190,12 +190,11 @@ class BertBuilder(object):
             'attention': {"attention", "linear", "quantize"} & set(choice),
             'addNorm': {"addNorm", "linear", "quantize"} & set(choice),
             'feedForward': {"feedForward", "linear", "quantize"} & set(choice),
-            'pooler': {"pooler", "linear", "quantize"} & set(choice),
-            'classifier': {"classifier", "linear", "quantize"} & set(choice)
+            'pooler': {"pooler", "linear", "quantize"} & set(choice)
         }
         print(self.choice)
         if not set(choice).issubset({"embedding", "attention", "addNorm", "feedForward", "pooler",
-                                     "classifier", "linear", "quantize", "classic"}):
+                                     "linear", "quantize", "classic"}):
             print("invalid choice {}".format(choice))
             exit(0)
 
@@ -1574,10 +1573,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
-        if builder.choice['classifier']:
-            self.classifier = builder.linear(config.hidden_size, config.num_labels, name='classifier')
-        else:
-            self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1672,15 +1668,15 @@ class BertForSequenceClassification(BertPreTrainedModel):
 )
 class BertForMultipleChoice(BertPreTrainedModel):
     def __init__(self, config):
-        super().__init__(config)
+        super().__init__(config, builder=None)
 
-        self.bert = BertModel(config)
+        self.bert = BertModel(config, builder=builder)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
+        # self.classifier = nn.Linear(config.hidden_size, 1)
         self.classifier = nn.Linear(config.hidden_size, 1)
-
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1768,17 +1764,17 @@ class BertForMultipleChoice(BertPreTrainedModel):
 class BertForTokenClassification(BertPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
 
-    def __init__(self, config):
+    def __init__(self, config, builder=None):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.bert = BertModel(config, add_pooling_layer=False)
+        self.bert = BertModel(config, add_pooling_layer=False, builder=builder)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
+        # self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1854,13 +1850,13 @@ class BertForTokenClassification(BertPreTrainedModel):
 class BertForQuestionAnswering(BertPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
 
-    def __init__(self, config):
+    def __init__(self, config, builder=None):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.bert = BertModel(config, add_pooling_layer=False)
-        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+        self.bert = BertModel(config, add_pooling_layer=False, builder=builder)
 
+        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1965,8 +1961,17 @@ bert_versions = {
     'bert': {
         'net': BertModel
     },
-    'bertForSequence': {
+    'BertForSequenceClassification': {
         'net': BertForSequenceClassification
+    },
+    'BertForMultipleChoice': {
+        'net': BertForMultipleChoice
+    },
+    'BertForTokenClassification': {
+        'net': BertForSequenceClassification
+    },
+    'BertForQuestionAnswering': {
+        'net': BertForQuestionAnswering
     }
 }
 
@@ -1977,7 +1982,6 @@ bert_choices = {
     'addNorm': 'quantize BertSelfOutput,BertOutput',
     'feedForward': 'quantize BertIntermediate',
     'pooler': 'quantize BertPooler',
-    'classifier': 'quantize BertForSequenceClassification',
     'linear': 'quantize all the linear layers',
     'quantize': 'quantize all the layers'
 }
