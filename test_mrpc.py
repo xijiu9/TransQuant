@@ -18,6 +18,7 @@ parser.add_argument('--twolayers_gradweight', '--2gw', type=str2bool, default=Fa
 parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
 parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
                     choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
+parser.add_argument('--ACT2FN', type=str, default='gelu', help='')
 parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
 parser.add_argument('--training-bit', type=str, default='', help='weight number of bits', required=True,
                     choices=['exact', 'qat', 'all8bit', 'star_weight', 'only_weight', 'weight4', 'all4bit', 'forward8',
@@ -38,6 +39,8 @@ parser.add_argument('--seed', type=int, default=27, help='apply LSQ')
 parser.add_argument("--per_device_train_batch_size", type=int, default=32, help="Batch size (per device) for the training dataloader.",)
 
 parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
+parser.add_argument('--clip-value', type=float, default=0, help='Choose a linear layer to quantize')
+parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
 
 args = parser.parse_args()
 
@@ -100,8 +103,12 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
           "--per_device_train_batch_size {} --learning_rate 2e-5 --seed {} --num_train_epochs {} "
           "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch BertForSequenceClassification {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
-          "--2gw {} --2gi {} --luq {} --forward-method {} --cutood {}"
+          "--2gw {} --2gi {} --luq {} --forward-method {}"
+          " --cutood {} --clip-value {} --ACT2FN {} "
+          "--plt-debug {}"
           .format(args.task, args.per_device_train_batch_size, args.seed, args.epochs,
                   args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
                   bbits, bwbits, abits, wbits,
-                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method, args.cutood))
+                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method,
+                  args.cutood, args.clip_value, args.ACT2FN,
+                  args.plt_debug))

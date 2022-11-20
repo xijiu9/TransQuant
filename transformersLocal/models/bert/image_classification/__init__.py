@@ -4,3 +4,4 @@ from . import mixup
 from . import smoothing
 from . import quantize
 from . import preconditioner
+from . import activation_quantizer

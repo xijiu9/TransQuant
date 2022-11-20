@@ -223,6 +223,8 @@ def parse_args():
 
     parser.add_argument('--choice', nargs='+', type=str, help='Choose a linear layer to quantize')
 
+    ACT2FNconfig = transformersLocal.activations.ACT2FN.keys()
+    parser.add_argument('--ACT2FN', type=str, default='gelu', choices=ACT2FNconfig, help='')
     def str2bool(v):
         if isinstance(v, bool):
             return v
@@ -254,6 +256,9 @@ def parse_args():
     parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
                         choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
     parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
+    parser.add_argument('--clip-value', type=float, default=0, help='Choose a linear layer to quantize')
+    parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
+
 
     #Todo:添加参数部分到此结束
     args = parser.parse_args()
@@ -294,27 +299,8 @@ def main():
     qconfig.luq = args.luq
     qconfig.forward_method = args.forward_method
     qconfig.cutood = args.cutood
+    qconfig.clip_value = args.clip_value
     qconfig.choice = args.choice
-
-
-    # if args.optimizer_batch_size < 0:
-    #     batch_size_multiplier = 1
-    # else:
-    #     tbs = args.world_size * args.batch_size
-    #     if args.optimizer_batch_size % tbs != 0:
-    #         print("Warning: simulated batch size {} is not divisible by actual batch size {}".format(args.optimizer_batch_size, tbs))
-    #     batch_size_multiplier = int(args.optimizer_batch_size/ tbs)
-    #     print("BSM: {}".format(batch_size_multiplier))
-
-    # pretrained_weights = None
-    # if args.pretrained_weights:
-    #     if os.path.isfile(args.pretrained_weights):
-    #         print("=> loading pretrained weights from '{}'".format(args.pretrained_weights))
-    #         pretrained_weights = torch.load(args.pretrained_weights)
-    #     else:
-    #         print("=> no pretrained weights found at '{}'".format(args.resume))
-
-    # optionally resume from a checkpoint
 
     #Todo:end of add something
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
@@ -427,9 +413,7 @@ def main():
     config.classifier_dropout = pretrainedConfig.classifier_dropout
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=not args.use_slow_tokenizer)
     #Todo:在training.py文件写完之后应用对应的模型
-    print("*" * 100, args.choice, "*" * 100)
-    model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
-    print("model.num_label is:",model.num_labels)
+
     PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(#Todo:修改模型
         args.model_name_or_path,
         from_tf=bool(".ckpt" in args.model_name_or_path),
@@ -439,30 +423,17 @@ def main():
     print("pretrainedModel.num_label is:",PreTrainedModel.num_labels)
     
     pretrained_dict = PreTrainedModel.state_dict()
+
+    print("*" * 100, args.choice, "*" * 100)
+
+    config.hidden_act = args.ACT2FN
+    model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
+    print("model.num_label is:",model.num_labels)
+    
     model_dict = model.state_dict()
     pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if (key in model_dict and 'classifier' not in key)}
-    # print(preTraineddict)
-    # print('------------------------')
-    # with open('PreTrainedModelKey.txt','w') as f:
-    #     for key,value in pretrained_dict.items():
-    #         f.write(str(key) + '\n')
-    
-    #for key,value in pretrained_dict.items():
-        # print(key)
-    # print(mydict)
-    # with open('mymodel.txt','w') as f:
-    #     for key,value in mydict.items():
-    #         f.write(str(key) + '\n')
-    model.load_state_dict(pretrained_dict_part, strict=False)
 
-    # #Todo:进行参数的迁移
-    # for (name, parameter), (p_name, p_parameter) in zip(model.named_parameters(), PreTrainedModel.named_parameters()):
-    #     assert name == p_name
-    #     parameter.requires_grad = False
-    #     p_parameter.requires_grad = False
-    #     parameter.fill_(0).add_(p_parameter)
-    #     parameter.requires_grad = True
-    #     p_parameter.requires_grad = True
+    model.load_state_dict(pretrained_dict_part, strict=False)
 
     # Preprocessing the datasets
     if args.task_name is not None:
@@ -665,6 +636,57 @@ def main():
             resume_step -= starting_epoch * len(train_dataloader)
 
     for epoch in range(starting_epoch, args.num_train_epochs):
+
+        if args.plt_debug:
+            from transformersLocal.models.bert.image_classification.quantize import QLinear, QIdentity
+            # print(model.bert)
+            for step, batch in enumerate(train_dataloader):
+                break
+            print("saved variance and leverage score")
+
+            qconfig.grads = [[], [], [], []]
+            optimizer.zero_grad()
+            qconfig.quantize_gradient = False
+            print("calculate FG")
+
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss = loss / args.gradient_accumulation_steps
+            accelerator.backward(loss)
+
+            torch.cuda.synchronize()
+            FG, FG_grad = [], qconfig.grads
+            l = [module for module in model.modules() if isinstance(module, QLinear)]
+            for layers in l:
+                FG.append(layers.weight.grad)
+
+            qconfig.grads = [[], [], [], []]
+            optimizer.zero_grad()
+            qconfig.quantize_gradient = True
+            print("calculate TG")
+
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss = loss / args.gradient_accumulation_steps
+            accelerator.backward(loss)
+
+            torch.cuda.synchronize()
+            TG, TG_grad = [], qconfig.grads
+            l = [module for module in model.modules() if isinstance(module, QLinear)]
+            for layers in l:
+                TG.append(layers.weight.grad)
+
+            print(len(FG), len(TG))
+            torch.save({"FG": FG, "TG": TG, "FG_grad": FG_grad, "TG_grad": TG_grad}, os.path.join(args.output_dir, '{}epoch.pt'.format(epoch)))
+            qconfig.quantize_gradient = args.qg
+            optimizer.zero_grad()
+            qconfig.grads = None
+
+            for fg, tg in zip(FG, TG):
+                print(fg - tg)
+                break
+
+
         model.train()
         if args.with_tracking:
             total_loss = 0
@@ -749,6 +771,7 @@ def main():
             if args.output_dir is not None:
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
+
 
     # if args.output_dir is not None:
     #     accelerator.wait_for_everyone()

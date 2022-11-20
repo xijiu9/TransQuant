@@ -1667,7 +1667,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
     BERT_START_DOCSTRING,
 )
 class BertForMultipleChoice(BertPreTrainedModel):
-    def __init__(self, config):
+    def __init__(self, config, builder=None):
         super().__init__(config, builder=None)
 
         self.bert = BertModel(config, builder=builder)
@@ -1968,7 +1968,7 @@ bert_versions = {
         'net': BertForMultipleChoice
     },
     'BertForTokenClassification': {
-        'net': BertForSequenceClassification
+        'net': BertForTokenClassification
     },
     'BertForQuestionAnswering': {
         'net': BertForQuestionAnswering
@@ -2010,6 +2010,7 @@ def build_bert_for_sequencePrecision(version, config, choice, bertConfig, model_
     print("Version: {}".format(version))
     print("Config: {}".format(config))
     print("Quantize: {}".format(choice))
+    print("Config: {}".format(bertConfig))
     model = version['net'](bertConfig, builder=builder)
 
     return model

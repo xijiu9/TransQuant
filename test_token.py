@@ -53,6 +53,10 @@ from transformers import (
 from transformers.utils import check_min_version, get_full_repo_name, send_example_telemetry
 from transformers.utils.versions import require_version
 
+import transformersLocal
+import transformersLocal.models.bert.modeling_bert as bertmodels
+from transformersLocal.models.bert.image_classification.preconditioner import init
+from transformersLocal.models.bert.image_classification.quantize import qconfig
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.25.0.dev0")
@@ -241,6 +245,58 @@ def parse_args():
         action="store_true",
         help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
     )
+
+    # Todo:添加的任务所需参数
+    model_names = bertmodels.bert_versions.keys()
+    model_configs = bertmodels.bert_configs.keys()
+
+    parser.add_argument('--arch', '-a', metavar='ARCH', default='bertForSequence',
+                        choices=model_names,
+                        help='model architecture: ' +
+                             ' | '.join(model_names) +
+                             ' (default: bertForSequence)')
+
+    parser.add_argument('--model-config', '-c', metavar='CONF', default='classic',
+                        choices=model_configs,
+                        help='model configs: ' +
+                             ' | '.join(model_configs) + '(default: classic)')
+
+    # 选择哪个层进行量化
+    # classic(都不量化), embedding(填充层), attention, addNorm, feedForward, pooler, classifier, linear(量化全部线性层), quantize(以上所有)
+
+    parser.add_argument('--choice', nargs='+', type=str, help='Choose a linear layer to quantize')
+
+    def str2bool(v):
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
+    parser.add_argument('--qa', type=str2bool, default=True, help='quantize activation')
+    parser.add_argument('--qw', type=str2bool, default=True, help='quantize weights')
+    parser.add_argument('--qg', type=str2bool, default=True, help='quantize gradients')
+    parser.add_argument('--biased', type=str2bool, default=False, help='biased quantization')
+    parser.add_argument('--abits', type=int, default=8, help='activation number of bits')
+    parser.add_argument('--wbits', type=int, default=8, help='weight number of bits')
+    parser.add_argument('--biasbits', type=int, default=16, help='bias number of bits')
+    parser.add_argument('--bbits', type=int, default=8, help='backward number of bits')
+    parser.add_argument('--bwbits', type=int, default=8, help='backward weight number of bits')
+    parser.add_argument('--persample', type=str2bool, default=False, help='per-sample quantization of gradients')
+    parser.add_argument('--hadamard', type=str2bool, default=False, help='apply Hadamard transformation on gradients')
+    parser.add_argument('--biprecision', type=str2bool, default=True, help='Gradient bifurcation')
+    parser.add_argument('--twolayers_gradweight', '--2gw', type=str2bool, default=False,
+                        help='use two 4 bit to simulate a 8 bit')
+    parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False,
+                        help='use two 4 bit to simulate a 8 bit')
+    parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
+    parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
+                        choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
+    parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
+
     args = parser.parse_args()
 
     # Sanity checks
@@ -263,6 +319,24 @@ def parse_args():
 def main():
     args = parse_args()
 
+    qconfig.quantize_activation = args.qa
+    qconfig.quantize_weights = args.qw
+    qconfig.quantize_gradient = args.qg
+    qconfig.activation_num_bits = args.abits
+    qconfig.weight_num_bits = args.wbits
+    qconfig.bias_num_bits = args.biasbits
+    qconfig.backward_num_bits = args.bbits
+    qconfig.bweight_num_bits = args.bwbits
+    qconfig.backward_persample = args.persample
+    qconfig.hadamard = args.hadamard
+    qconfig.biased = args.biased
+    qconfig.biprecision = args.biprecision
+    qconfig.twolayers_gradweight = args.twolayers_gradweight
+    qconfig.twolayers_gradinputt = args.twolayers_gradinputt
+    qconfig.luq = args.luq
+    qconfig.forward_method = args.forward_method
+    qconfig.cutood = args.cutood
+    qconfig.choice = args.choice
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
     send_example_telemetry("run_ner_no_trainer", args)
@@ -384,12 +458,15 @@ def main():
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
     if args.config_name:
-        config = AutoConfig.from_pretrained(args.config_name, num_labels=num_labels)
+        pretrainedConfig = AutoConfig.from_pretrained(args.config_name, num_labels=num_labels)
     elif args.model_name_or_path:
-        config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels)
+        pretrainedConfig = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels)
     else:
-        config = CONFIG_MAPPING[args.model_type]()
+        pretrainedConfig = CONFIG_MAPPING[args.model_type]()
         logger.warning("You are instantiating a new config instance from scratch.")
+
+    config = transformersLocal.PretrainedConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels)
+    config.classifier_dropout = pretrainedConfig.classifier_dropout
 
     tokenizer_name_or_path = args.tokenizer_name if args.tokenizer_name else args.model_name_or_path
     if not tokenizer_name_or_path:
@@ -403,8 +480,10 @@ def main():
     else:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, use_fast=True)
 
+    model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
+
     if args.model_name_or_path:
-        model = AutoModelForTokenClassification.from_pretrained(
+        PreTrainedModel = AutoModelForTokenClassification.from_pretrained(
             args.model_name_or_path,
             from_tf=bool(".ckpt" in args.model_name_or_path),
             config=config,
@@ -412,7 +491,12 @@ def main():
         )
     else:
         logger.info("Training new model from scratch")
-        model = AutoModelForTokenClassification.from_config(config)
+        PreTrainedModel = AutoModelForTokenClassification.from_config(config)
+
+    pretrained_dict = PreTrainedModel.state_dict()
+    model_dict = model.state_dict()
+    pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if (key in model_dict and 'classifier' not in key)}
+    model.load_state_dict(pretrained_dict_part, strict=False)
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
@@ -637,6 +721,8 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+    for arg in vars(args):
+        print(arg, getattr(args, arg))
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0

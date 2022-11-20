@@ -41,6 +41,7 @@ class QuantizationConfig:
         self.luq = False
         self.forward_method = 'PTQ'
         self.cutood = None
+        self.clip_value = 0
         self.choice = None
 
     def activation_preconditioner(self):
@@ -84,7 +85,6 @@ class UniformQuantize(InplaceFunction):
 
     @staticmethod
     def forward(ctx, input, Preconditioner, stochastic=False, inplace=False):
-
         ctx.inplace = inplace
 
         if ctx.inplace:
@@ -122,25 +122,6 @@ class UniformQuantize(InplaceFunction):
         # straight-through estimator
         grad_input = grad_output
         return grad_input, None, None, None
-
-
-class UniformQuantizeGrad(InplaceFunction):
-    @staticmethod
-    def forward(ctx, input, Preconditioner, stochastic=True):
-        ctx.stochastic = stochastic
-        ctx.inplace = False
-        ctx.Preconditioner = Preconditioner
-        return input
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        with torch.no_grad():
-            if qconfig.grads is not None:
-                qconfig.grads.append(grad_output.detach())
-
-            grad_input = quantize(grad_output, ctx.Preconditioner, stochastic=ctx.stochastic, inplace=False)
-
-        return grad_input, None, None
 
 
 def quantize(x, Preconditioner, stochastic=False, inplace=False):
@@ -193,6 +174,11 @@ class linear_act(Function):
         input_flatten = input.reshape(-1, C_in)
 
         if qconfig.twolayers_gradweight:
+            if qconfig.grads is not None:
+                qconfig.grads[0].append(grad_output_flatten_weight)
+                qconfig.grads[1].append(input_flatten)
+                print("save grad")
+
             m1, m2 = twolayer_linearsample_weight(grad_output_flatten_weight, input_flatten)
             grad_weight = m1.t().mm(m2)
         else:
@@ -204,11 +190,6 @@ class linear_act(Function):
             if special_flag:
                 grad_input = grad_output_flatten_active.mm(weight)
             else:
-                # m1, m2 = twolayer_linearsample_input(grad_output_flatten_active.t(), weight)
-                # # print(m1, m2)
-                # grad_input = m1.t().mm(m2)\
-
-                # I = torch.eye(input.shape[0], device="cuda")
                 I = torch.eye(grad_output_flatten_active.shape[0] // 2, device="cuda")
                 grad_input, _ = twolayer_linearsample_input(grad_output_flatten_active, I)
 
@@ -216,7 +197,9 @@ class linear_act(Function):
                 grad_input = grad_input.mm(weight)
                 checkNAN(grad_input, "grad input after")
                 # print(grad_output_flatten_active.shape)
-
+                if qconfig.grads is not None:
+                    qconfig.grads[2].append(grad_output_flatten_active)
+                    qconfig.grads[3].append(I)
         else:
             # print("input", grad_output_flatten_active.shape, weight.shape)
             grad_input = grad_output_flatten_active.mm(weight)
@@ -460,6 +443,8 @@ class QLinear(nn.Linear):
         if not self.first_pass:
             print("Actually Using QLinear!")
             self.first_pass = True
+        if qconfig.clip_value != 0:
+            input = input.clamp_(-qconfig.clip_value, qconfig.clip_value)
 
         if qconfig.cutood != 0:
             input_sort = torch.sort(input.flatten())[0]
@@ -517,6 +502,7 @@ class QIdentity(nn.Identity):
     def __init__(self, name=''):
         self.name = name
         super(QIdentity, self).__init__()
+        print(qconfig.choice)
         if name in qconfig.choice or qconfig.choice[0] in ['quantize']:
             if qconfig.forward_method == 'LSQ':
                 self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
@@ -530,6 +516,9 @@ class QIdentity(nn.Identity):
         if not self.first_pass:
             print("Actually Using QIdentity!")
             self.first_pass = True
+        if qconfig.clip_value != 0:
+            input = input.clamp_(-qconfig.clip_value, qconfig.clip_value)
+
         if qconfig.cutood != 0:
             input_sort = torch.sort(input.flatten())[0]
             max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]

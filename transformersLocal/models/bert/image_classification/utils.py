@@ -3,7 +3,8 @@ import numpy as np
 import torch
 import shutil
 import torch.distributed as dist
-
+import matplotlib.pyplot as plt
+import time
 
 def should_backup_checkpoint(args):
     def _sbc(epoch):
@@ -32,6 +33,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', checkpoint_di
             shutil.copyfile(filename, os.path.join(checkpoint_dir, 'model_best.pth.tar'))
         if backup_filename is not None:
             shutil.copyfile(filename, os.path.join(checkpoint_dir, backup_filename))
+
 
 
 def timed_generator(gen):
@@ -118,6 +120,9 @@ def twolayer_linearsample_weight(m1, m2):
     m1 = m1 / norm_x.unsqueeze(1)
 
     m1, m2 = m1[index, :], m2[index, :]
+
+    if torch.rand(1) < 0.002:
+        draw(norm_x, 'plt/weight/')
 
     return m1, m2
 
@@ -211,8 +216,32 @@ def twolayer_linearsample_input(m1, m2):
         torch.save({"m1": m1clone, "m2": m2clone},
                    "/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/savem1m2.pt")
         print("save for m1m2")
+
+    if torch.rand(1) < 0.005:
+        draw(norm_x, 'plt/input/')
     return m1, m2
 
+def draw(x, s=''):
+    x = x.sort(descending=True)[0]
+    x = x.detach().cpu().numpy()
+
+    plt_x = np.arange(len(x))
+    plt_y = np.array([])
+    for i in range(len(x)):
+        plt_y = np.append(plt_y, np.sum(x[:i]) / np.sum(x))
+
+    plt.figure()
+    plt.plot(plt_x, plt_y)
+    plt.axvline(x=len(x) // 2, color='red', linestyle='--')
+    time_tuple = time.localtime(time.time())
+    plt.savefig('{}{}:{}:{}.png'.format(s, time_tuple[3], time_tuple[4], time_tuple[5]))
+
+    plt.figure()
+    plt.plot(plt_x, np.log2(plt_y))
+    plt.axvline(x=len(x) // 2, color='red', linestyle='--')
+    plt.savefig('{}{}:{}:{}_log.png'.format(s, time_tuple[3], time_tuple[4], time_tuple[5]))
+
+    print("savefig")
 
 if __name__ == '__main__':
     # torch.set_printoptions(profile="full", linewidth=160)
