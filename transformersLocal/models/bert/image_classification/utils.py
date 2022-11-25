@@ -121,8 +121,8 @@ def twolayer_linearsample_weight(m1, m2):
 
     m1, m2 = m1[index, :], m2[index, :]
 
-    if torch.rand(1) < 0.002:
-        draw(norm_x, 'plt/weight/')
+    # if torch.rand(1) < 0.002:
+    #     draw(norm_x, 'plt/weight/')
 
     return m1, m2
 
@@ -217,8 +217,8 @@ def twolayer_linearsample_input(m1, m2):
                    "/home/xihaocheng20/ANNProject/ANN_Project/transformersLocal/models/bert/image_classification/ckpt/savem1m2.pt")
         print("save for m1m2")
 
-    if torch.rand(1) < 0.005:
-        draw(norm_x, 'plt/input/')
+    # if torch.rand(1) < 0.005:
+    #     draw(norm_x, 'plt/input/')
     return m1, m2
 
 def draw(x, s=''):

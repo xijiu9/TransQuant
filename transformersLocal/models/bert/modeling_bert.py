@@ -420,7 +420,7 @@ class BertSelfOutput(nn.Module):
     def __init__(self, config, builder=None):
         super().__init__()
         if builder.choice['addNorm']:
-            self.dense = builder.linear(config.hidden_size, config.hidden_size, name="addNorm")
+            self.dense = builder.linear(config.hidden_size, config.hidden_size, name="addNorm_sy")
         else:
             self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -504,7 +504,7 @@ class BertOutput(nn.Module):
     def __init__(self, config, builder=None):
         super().__init__()
         if builder.choice['addNorm']:
-            self.dense = builder.linear(config.intermediate_size, config.hidden_size, name='addNorm')
+            self.dense = builder.linear(config.intermediate_size, config.hidden_size, name='addNorm_nsy')
         else:
             self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)

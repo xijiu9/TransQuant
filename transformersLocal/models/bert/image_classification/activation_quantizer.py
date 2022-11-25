@@ -281,12 +281,7 @@ class LsqStepSize(nn.Parameter):
 def act_quant_fn(input, clip_val, num_bits, symmetric, quant_method, layerwise):
     if num_bits == 32:
         return input
-    elif quant_method == "bwn" and num_bits == 1:
-        raise NotImplementedError("Too bad performance, please dont")
-        # quant_fn = BwnQuantizer
-    elif quant_method == "twn" and num_bits == 2:
-        raise NotImplementedError("Too bad performance, please dont")
-        # quant_fn = TwnQuantizer
+
     elif quant_method=="uniform" and num_bits >= 2 and symmetric:
         quant_fn = SymQuantizer
     elif quant_method == "uniform" and num_bits >= 2 and not symmetric:
@@ -307,11 +302,6 @@ def weight_quant_fn(weight,  clip_val,  num_bits,  symmetric, quant_method, laye
     if num_bits == 32:
         return weight
 
-    # play with different variants of t2b quantizer
-    elif quant_method == "bwn" and num_bits == 1:
-        quant_fn = BwnQuantizer
-    elif quant_method == "twn" and num_bits == 2:
-        quant_fn = TwnQuantizer
     elif num_bits >= 2 and symmetric and quant_method == "uniform":
         quant_fn = SymQuantizer
     elif quant_method == "uniform" and num_bits >= 2 and not symmetric:
@@ -320,104 +310,10 @@ def weight_quant_fn(weight,  clip_val,  num_bits,  symmetric, quant_method, laye
         quant_fn = SymLsqQuantizer
     elif quant_method == "lsq" and num_bits >= 2 and not symmetric:
         quant_fn = AsymLsqQuantizer
-    elif quant_method == "laq":
-        quant_fn = LaqQuantizer
     else:
         raise ValueError("Unknown quant_method")
 
     weight = quant_fn.apply(weight, clip_val,  num_bits, layerwise)
     return weight
 
-
-class QuantizeLinear(nn.Linear):
-
-    def __init__(self, *kargs, clip_val=2.5, weight_bits=8, input_bits=8, learnable=False, symmetric=True,
-                 weight_layerwise=True, input_layerwise=True, weight_quant_method="twn", input_quant_method="uniform",
-                 **kwargs):
-        super(QuantizeLinear, self).__init__(*kargs, **kwargs)
-        self.weight_bits = weight_bits
-        self.input_bits = input_bits
-        self.learnable = learnable
-        self.symmetric = symmetric
-        self.weight_layerwise = weight_layerwise
-        self.input_layerwise = input_layerwise
-        self.weight_quant_method = weight_quant_method
-        self.input_quant_method = input_quant_method
-        self._build_weight_clip_val(weight_quant_method, learnable, init_val=clip_val)
-        self._build_input_clip_val(input_quant_method, learnable, init_val=clip_val)
-
-    def _build_weight_clip_val(self, quant_method, learnable, init_val):
-        if quant_method == 'uniform':
-            # init_val = self.weight.mean().item() + 3 * self.weight.std().item()
-            self.register_buffer('weight_clip_val', torch.tensor([-init_val, init_val]))
-            if learnable:
-                self.weight_clip_val = nn.Parameter(self.weight_clip_val)
-        elif quant_method == 'lsq':
-            # TODO: for now we abuse the name for consistent reference in learner.
-            assert learnable, 'LSQ must use leranable step size!'
-            self.weight_clip_val = LsqStepSize(torch.tensor(1.0)) # stepsize will be initialized in the first quantization
-        else:
-            self.register_buffer('weight_clip_val', None)
-
-    def _build_input_clip_val(self, quant_method, learnable, init_val):
-        if quant_method == 'uniform':
-            self.register_buffer('input_clip_val', torch.tensor([-init_val, init_val]))
-            if learnable:
-                self.input_clip_val = nn.Parameter(self.input_clip_val)
-        elif quant_method == 'lsq':
-            # TODO: for now we abuse the name for consistent reference in learner.
-            assert learnable, 'LSQ must use leranable step size!'
-            self.input_clip_val = LsqStepSize(torch.tensor(1.0))  # stepsize will be initialized in the first quantization
-        else:
-            self.register_buffer('input_clip_val', None)
-
-    def forward(self, input):
-        # quantize weight
-        weight = weight_quant_fn(self.weight, self.weight_clip_val, num_bits=self.weight_bits, symmetric=self.symmetric,
-                                 quant_method=self.weight_quant_method, layerwise=self.weight_layerwise)
-        # quantize input
-        input = act_quant_fn(input, self.input_clip_val, num_bits=self.input_bits, symmetric=self.symmetric,
-                             quant_method=self.input_quant_method, layerwise=self.input_layerwise)
-        out = nn.functional.linear(input, weight)
-        if not self.bias is None:
-            out += self.bias.view(1, -1).expand_as(out)
-
-        return out
-
-
-class QuantizeEmbedding(nn.Embedding):
-
-    def __init__(self, *kargs, clip_val=2.5, weight_bits=8, input_bits=8, learnable=False, symmetric=True,
-                 embed_layerwise=False, weight_quant_method="twn", input_quant_method="uniform", **kwargs):
-        super(QuantizeEmbedding, self).__init__(*kargs, **kwargs)
-        self.weight_bits = weight_bits
-        self.input_bits = input_bits
-        self.learnable = learnable
-        self.symmetric = symmetric
-        self.embed_layerwise = embed_layerwise
-        self.weight_quant_method = weight_quant_method
-        self.input_quant_method = input_quant_method
-        self._build_embed_clip_val(weight_quant_method, learnable, init_val=clip_val)
-
-    def _build_embed_clip_val(self, quant_method, learnable, init_val):
-        if quant_method == 'uniform':
-            self.register_buffer('embed_clip_val', torch.tensor([-init_val, init_val]))
-            if learnable:
-                self.embed_clip_val = nn.Parameter(self.embed_clip_val)
-        elif quant_method == 'lsq':
-            # TODO: for now we abuse the name for consistent reference in learner.
-            assert learnable, 'LSQ must use leranable step size!'
-            self.embed_clip_val = LsqStepSize(torch.tensor(1.0)) # stepsize will be initialized in the first quantization
-        else:
-            self.register_buffer('embed_clip_val', None)
-
-    def forward(self, input):
-        weight = weight_quant_fn(self.weight, self.embed_clip_val, num_bits=self.weight_bits, symmetric=self.symmetric,
-                                 quant_method=self.weight_quant_method, layerwise=self.embed_layerwise)
-
-        out = nn.functional.embedding(
-            input, weight, self.padding_idx, self.max_norm,
-            self.norm_type, self.scale_grad_by_freq, self.sparse)
-
-        return out
 

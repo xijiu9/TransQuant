@@ -16,8 +16,10 @@ def str2bool(v):
 parser = argparse.ArgumentParser(description='test')
 parser.add_argument('--twolayers_gradweight', '--2gw', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
 parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False, help='use two 4 bit to simulate a 8 bit')
-parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
-                    choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
+parser.add_argument('--weight_quant_method', '--wfq', default='ptq', type=str, metavar='strategy',
+                    choices=['uniform', 'lsq', 'ptq'])
+parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, metavar='strategy',
+                    choices=['uniform', 'lsq', 'ptq'])
 parser.add_argument('--ACT2FN', type=str, default='gelu', help='')
 parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
 parser.add_argument('--training-bit', type=str, default='', help='weight number of bits', required=True,
@@ -39,7 +41,7 @@ parser.add_argument('--seed', type=int, default=27, help='apply LSQ')
 parser.add_argument("--per_device_train_batch_size", type=int, default=32, help="Batch size (per device) for the training dataloader.",)
 
 parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
-parser.add_argument('--clip-value', type=float, default=0, help='Choose a linear layer to quantize')
+parser.add_argument('--clip-value', type=float, default=100, help='Choose a linear layer to quantize')
 parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
 
 args = parser.parse_args()
@@ -74,9 +76,9 @@ else:
         bbits, bwbits, abits, wbits = args.plt_bit[6], args.plt_bit[5], args.plt_bit[3], args.plt_bit[4]
 
 if args.twolayers_gradweight:
-    assert bwbits == 4
+    assert int(bwbits) == 4
 if args.twolayers_gradinputt:
-    assert bbits == 4
+    assert int(bbits) == 4
 
 if args.twolayers_gradweight and args.twolayers_gradinputt:
     method = 'twolayer'
@@ -103,12 +105,12 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
           "--per_device_train_batch_size {} --learning_rate 2e-5 --seed {} --num_train_epochs {} "
           "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch BertForSequenceClassification {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
-          "--2gw {} --2gi {} --luq {} --forward-method {}"
+          "--2gw {} --2gi {} --luq {} --weight_quant_method {} --input_quant_method {} "
           " --cutood {} --clip-value {} --ACT2FN {} "
           "--plt-debug {}"
           .format(args.task, args.per_device_train_batch_size, args.seed, args.epochs,
                   args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
                   bbits, bwbits, abits, wbits,
-                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.forward_method,
+                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.weight_quant_method, args.input_quant_method,
                   args.cutood, args.clip_value, args.ACT2FN,
                   args.plt_debug))

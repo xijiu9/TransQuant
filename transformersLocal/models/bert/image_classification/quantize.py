@@ -6,15 +6,21 @@ import numpy as np
 import math
 from torch.nn.parameter import Parameter
 from torch.autograd.function import InplaceFunction, Function
+import matplotlib.pyplot as plt
+import time
 
 try:
     from .preconditioner import ScalarPreconditioner, ScalarPreconditionerAct, lsq_per_tensor, lsq_plus, \
         TwoLayerWeightPreconditioner, LUQPreconditioner
     from .utils import twolayer_linearsample_weight, twolayer_linearsample_input, checkNAN
+    from .activation_quantizer import SymQuantizer, AsymQuantizer, SymLsqQuantizer, AsymLsqQuantizer, LsqStepSize, \
+        act_quant_fn, weight_quant_fn
 except:
     from preconditioner import ScalarPreconditioner, ScalarPreconditionerAct, lsq_per_tensor, lsq_plus, \
         TwoLayerWeightPreconditioner, LUQPreconditioner
     from utils import twolayer_linearsample_weight, twolayer_linearsample_input, checkNAN
+    from activation_quantizer import SymQuantizer, AsymQuantizer, SymLsqQuantizer, AsymLsqQuantizer, LsqStepSize, \
+        act_quant_fn, weight_quant_fn
 import IPython
 import os
 import matplotlib.pyplot as plt
@@ -43,6 +49,9 @@ class QuantizationConfig:
         self.cutood = None
         self.clip_value = 0
         self.choice = None
+
+        self.weight_quant_method = 'LSQ'
+        self.input_quant_method = ''
 
     def activation_preconditioner(self):
         # return lambda x: ForwardPreconditioner(x, self.activation_num_bits)
@@ -244,113 +253,6 @@ class identity_act(Function):
         return grad_input_transform
 
 
-class LSQPerTensor(nn.Module):
-    def __init__(self, bits, aw='', name=''):
-        super(LSQPerTensor, self).__init__()
-
-        self.aw = aw
-        self.bits = bits
-        self.step_size = Parameter(torch.tensor(1.0), requires_grad=True)
-        self.initialized = False
-        self.name = name
-
-    def forward(self, x):
-        if not self.initialized:
-            with torch.no_grad():
-                num_bins = 2 ** self.bits - 1
-                if self.name in ["attention", "addNorm", "pooler", "classifier"]:
-                    step_size = 2 * x.abs().mean() / np.sqrt(num_bins)
-                elif self.name in ["embedding"]:
-                    step_size = 4 * x.abs().mean() / np.sqrt(num_bins)  # embedding
-                elif self.name == "feedForward":
-                    # step_size = x.abs().max() / num_bins  # embedding
-                    step_size = 6 * x.abs().mean() / np.sqrt(num_bins)  # embedding
-                else:
-                    if name != '':
-                        print("?{}".format(name))
-                self.step_size.copy_(step_size)  # LSQ type
-
-                self.initialized = True
-
-        if x.max() > -1e-8 and x.min() < 1e-8:
-            symm = True
-        elif x.max() > -1e-8 and x.min() > -1e-8:
-            symm = False
-        else:
-            print("min max not compatible for SAWB")
-            symm = None
-        rand = torch.rand(1)
-        # if rand < 0.001:
-        #     print(self.name, self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
-        return lsq_per_tensor().apply(x, self.step_size, self.bits, symm, rand)
-
-
-class LSQplus(nn.Module):
-    def __init__(self, bits, aw='', name=''):
-        super(LSQplus, self).__init__()
-
-        self.aw = aw
-        self.bits = bits
-        if aw == 'a':
-            self.step_size = Parameter(torch.tensor(1.0), requires_grad=True)
-            self.beta = Parameter(torch.tensor(1.0), requires_grad=True)
-        elif aw == 'w':
-            self.step_size = Parameter(torch.tensor(1.0), requires_grad=True)
-            self.beta = Parameter(torch.tensor(0.0), requires_grad=False)
-        self.initialized = False
-        self.name = name
-
-    def forward(self, x):
-        if not self.initialized:
-            with torch.no_grad():
-                num_bins = 2 ** self.bits - 1
-                if self.aw == 'a':
-                    if self.name in ["attention", "addNorm", "feedForward", "pooler", "classifier"]:
-                        step_size = 2 * x.abs().mean() / np.sqrt(num_bins)
-                    elif self.name == "embedding":
-                        step_size = 4 * x.abs().mean() / np.sqrt(num_bins)  # embedding
-                    else:
-                        if name != '':
-                            print("?{}".format(name))
-                    self.step_size.copy_(step_size)  # LSQ type
-
-                    self.initialized = True
-                elif self.aw == 'w':
-                    mean = torch.mean(x.detach())
-                    std = torch.std(x.detach())
-                    self.step_size.data = max([torch.abs(mean - 3 * std), torch.abs(mean + 3 * std)]) / num_bins
-
-                    self.initialized = True
-
-                    del mean, std, num_bins
-
-        if x.max() > -1e-8 and x.min() < 1e-8:
-            symm = True
-        elif x.max() > -1e-8 and x.min() > -1e-8:
-            symm = False
-        else:
-            print("min max not compatible for SAWB")
-            symm = None
-        rand = torch.rand(1)
-        # if rand < 0.001:
-        #     print(self.name, self.aw, (x.min() / x.max()).abs(), x.min(), x.max())
-        return lsq_plus().apply(x, self.step_size, self.beta, self.bits, symm, self.aw, rand)
-
-    def quantize_MSE(self, input, scale, bits, symm):
-        num_bins = 2 ** bits - 1
-        bias = -num_bins / 2 if symm else 0
-
-        # Forward
-        eps = 1e-7
-        scale = scale + eps
-        transformed = input / scale - bias
-        vbar = torch.clamp(transformed, 0.0, num_bins).round()
-        quantized = (vbar + bias) * scale
-
-        MSE = (quantized - input).square().sum()
-        return MSE
-
-
 class UniformQuantizeSawb(InplaceFunction):
 
     @staticmethod
@@ -427,66 +329,98 @@ class QLinear(nn.Linear):
         super(QLinear, self).__init__(in_features, out_features, bias)
         self.quantize_input = QuantMeasure()
         self.name = name
-        if name in qconfig.choice or qconfig.choice[0] in ['quantize', 'linear']:
-            if qconfig.forward_method == 'LSQ':
-                self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
-                self.lsqactive = LSQPerTensor(qconfig.activation_num_bits, aw='a', name=name)
-            elif qconfig.forward_method == 'LSQplus':
-                self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
-                self.lsqplusactive = LSQplus(qconfig.activation_num_bits, aw='a', name=name)
-            elif qconfig.forward_method == 'SAWB':
-                self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
-                self.SAWBactive = SAWBTensor(qconfig.activation_num_bits, aw='a', name=name)
+
         self.first_pass = False
+        self._build_weight_clip_val(qconfig.weight_quant_method, learnable=(qconfig.weight_quant_method == 'lsq'),
+                                    init_val=qconfig.clip_value)
+        self._build_input_clip_val(qconfig.input_quant_method, learnable=(qconfig.input_quant_method == 'lsq'),
+                                   init_val=qconfig.clip_value)
+
+    def _build_weight_clip_val(self, quant_method, learnable, init_val):
+        if quant_method == 'uniform':
+            # init_val = self.weight.mean().item() + 3 * self.weight.std().item()
+            self.register_buffer('weight_clip_val', torch.tensor([-init_val, init_val]))
+            if learnable:
+                self.weight_clip_val = nn.Parameter(self.weight_clip_val)
+        elif quant_method == 'lsq':
+            # TODO: for now we abuse the name for consistent reference in learner.
+            assert learnable, 'LSQ must use leranable step size!'
+            self.weight_clip_val = LsqStepSize(
+                torch.tensor(1.0))  # stepsize will be initialized in the first quantization
+        else:
+            self.register_buffer('weight_clip_val', None)
+
+    def _build_input_clip_val(self, quant_method, learnable, init_val):
+        if quant_method == 'uniform':
+            self.register_buffer('input_clip_val', torch.tensor([-init_val, init_val]))
+            if learnable:
+                self.input_clip_val = nn.Parameter(self.input_clip_val)
+        elif quant_method == 'lsq':
+            # TODO: for now we abuse the name for consistent reference in learner.
+            assert learnable, 'LSQ must use learnable step size!'
+            self.input_clip_val = LsqStepSize(
+                torch.tensor(1.0))  # stepsize will be initialized in the first quantization
+        else:
+            self.register_buffer('input_clip_val', None)
 
     def forward(self, input):
         if not self.first_pass:
             print("Actually Using QLinear!")
             self.first_pass = True
-        if qconfig.clip_value != 0:
-            input = input.clamp_(-qconfig.clip_value, qconfig.clip_value)
 
         if qconfig.cutood != 0:
             input_sort = torch.sort(input.flatten())[0]
             max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
-            input[input > max_thres] = max_thres
-            input[input < min_thres] = min_thres
-            path = os.path.join("/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt", qconfig.forward_method, str(qconfig.cutood), self.name)
-            os.makedirs(path, exist_ok=True)
-            num_files = len(os.listdir(path))
-            if num_files < 10:
-                torch.save([input, self.weight], os.path.join(path, '{}_{}.pt'.format(self.name, num_files)))
-                print(self.name, (input.max() / input.min()).abs(), input.max(), input.min())
+            input = torch.clamp(input, min_thres, max_thres)
+            # input[input > max_thres] = max_thres
+            # input[input < min_thres] = min_thres
 
-        if qconfig.quantize_activation:
-            if qconfig.forward_method == 'LSQ':
-                qinput = self.lsqactive(input)
-            elif qconfig.forward_method == 'LSQplus':
-                qinput = self.lsqplusactive(input)
-            elif qconfig.forward_method == 'SAWB':
-                qinput = self.SAWBactive(input)
-            else:
-                qinput = self.quantize_input(input)
+        if qconfig.weight_quant_method == 'ptq':
+            qweight = quantize(self.weight, qconfig.weight_preconditioner())
         else:
-            qinput = input
+            qweight = weight_quant_fn(self.weight, self.weight_clip_val, num_bits=qconfig.weight_num_bits,
+                                      symmetric=True,
+                                      quant_method=qconfig.weight_quant_method, layerwise=True)
+        # quantize input
 
-        if qconfig.quantize_weights:
-            if qconfig.forward_method == 'LSQ':
-                qweight = self.lsqweight(self.weight)
-            elif qconfig.forward_method == 'LSQplus':
-                qweight = self.lsqplusweight(self.weight)
-            elif qconfig.forward_method == 'SAWB':
-                qweight = self.SAWBweight(self.weight)
-            else:
-                qweight = quantize(self.weight, qconfig.weight_preconditioner())
-
-            if self.bias is not None:
-                qbias = quantize(self.bias, qconfig.bias_preconditioner())
-            else:
-                qbias = None
+        if qconfig.input_quant_method == 'ptq':
+            qinput = self.quantize_input(input)
         else:
-            qweight = self.weight
-            qbias = self.bias
+            qinput = act_quant_fn(input, self.input_clip_val, num_bits=qconfig.activation_num_bits,
+                                  symmetric=(self.name != 'addNorm_nsy'),
+                                  quant_method=qconfig.input_quant_method, layerwise=True)
+
+        qbias = self.bias
+
+        def draw(x, qx, s=''):
+            plt.figure()
+            num_bins = 256
+            n, bins, patches = plt.hist(x, num_bins, density=1, color='green')
+            # qn, _, _ = plt.hist(qx, num_bins, density=1 / 16, color='red')
+            for qxi in np.unique(qx):
+                plt.axvline(x=qxi, color='red', linestyle='--')
+            plt.xlabel('X-Axis')
+            plt.ylabel('Y-Axis')
+            plt.xlim([x.min() * 1.1, x.max() * 1.1])
+            plt.ylim([0, n.max() * 1.1])
+            plt.title("ratio={}\nmin={}\nmax={}".format(np.abs((x.min() / x.max())), x.min(), x.max()),
+                      fontweight="bold")
+            time_tuple = time.localtime(time.time())
+
+            os.makedirs("plt/{}/{}".format(self.name, s), exist_ok=True)
+            plt.savefig('plt/{}/{}/{}:{}:{}.png'.format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5]))
+            plt.close()
+
+            f = open('plt/{}/{}/{}:{}:{}.txt'.format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5]), 'a')
+            # f.write('{}\n{}\n{}\n{}\n'.format(x, qx, n, qn))
+            f.write('{}\n{}\n{}\n{}\n'.format(x, qx, n, np.unique(qx)))
+            f.close()
+
+        with torch.no_grad():
+            if torch.rand(1) < 0.001:
+                draw(input.view(-1).detach().cpu().numpy(), qinput.view(-1).detach().cpu().numpy(), 'input')
+                draw(self.weight.view(-1).detach().cpu().numpy(), qweight.view(-1).detach().cpu().numpy(), 'weight')
+                print("saved!")
 
         if hasattr(self, 'exact') or not qconfig.quantize_gradient:
             output = F.linear(qinput, qweight, qbias)
@@ -502,47 +436,35 @@ class QIdentity(nn.Identity):
     def __init__(self, name=''):
         self.name = name
         super(QIdentity, self).__init__()
-        print(qconfig.choice)
-        if name in qconfig.choice or qconfig.choice[0] in ['quantize']:
-            if qconfig.forward_method == 'LSQ':
-                self.lsqweight = LSQPerTensor(qconfig.weight_num_bits, aw='w', name=name)
-            elif qconfig.forward_method == 'LSQplus':
-                self.lsqplusweight = LSQplus(qconfig.weight_num_bits, aw='w', name=name)
-            elif qconfig.forward_method == 'SAWB':
-                self.SAWBweight = SAWBTensor(qconfig.weight_num_bits, aw='w', name=name)
+
+        self.quantize_input = QuantMeasure()
         self.first_pass = False
-        
+        self._build_embed_clip_val(qconfig.weight_quant_method, learnable=(qconfig.weight_quant_method == 'lsq'),
+                                   init_val=qconfig.clip_value)
+
+    def _build_embed_clip_val(self, quant_method, learnable, init_val):
+        if quant_method == 'uniform':
+            self.register_buffer('embed_clip_val', torch.tensor([-init_val, init_val]))
+            if learnable:
+                self.embed_clip_val = nn.Parameter(self.embed_clip_val)
+        elif quant_method == 'lsq':
+            # TODO: for now we abuse the name for consistent reference in learner.
+            assert learnable, 'LSQ must use learnable step size!'
+            self.embed_clip_val = LsqStepSize(
+                torch.tensor(1.0))  # stepsize will be initialized in the first quantization
+        else:
+            self.register_buffer('embed_clip_val', None)
+
     def forward(self, input):
         if not self.first_pass:
             print("Actually Using QIdentity!")
             self.first_pass = True
-        if qconfig.clip_value != 0:
-            input = input.clamp_(-qconfig.clip_value, qconfig.clip_value)
 
-        if qconfig.cutood != 0:
-            input_sort = torch.sort(input.flatten())[0]
-            max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
-            input[input > max_thres] = max_thres
-            input[input < min_thres] = min_thres
-            path = os.path.join("/workspace/home/xihaocheng20/TransQuant/transformersLocal/models/bert/image_classification/ckpt", qconfig.forward_method, str(qconfig.cutood), self.name)
-            os.makedirs(path, exist_ok=True)
-            num_files = len(os.listdir(path))
-            if num_files < 10:
-                torch.save([None, input], os.path.join(path, '{}_{}.pt'.format(self.name, num_files)))
-                print(self.name, (input.max() / input.min()).abs(), input.max(), input.min())
-
-
-        if qconfig.quantize_weights:
-            if qconfig.forward_method == 'LSQ':
-                qinput = self.lsqweight(input)
-            elif qconfig.forward_method == 'LSQplus':
-                qinput = self.lsqplusweight(input)
-            elif qconfig.forward_method == 'SAWB':
-                qinput = self.SAWBweight(input)
-            else:
-                qinput = quantize(input, qconfig.weight_preconditioner())
+        if qconfig.weight_quant_method == 'ptq':
+            qinput = quantize(input, qconfig.weight_preconditioner())
         else:
-            qinput = input
+            qinput = weight_quant_fn(input, self.embed_clip_val, num_bits=qconfig.weight_num_bits, symmetric=True,
+                                     quant_method=qconfig.weight_quant_method, layerwise=True)
 
         if hasattr(self, 'exact') or not qconfig.quantize_gradient:
             output = qinput
@@ -563,6 +485,7 @@ if __name__ == '__main__':
                 continue
             input, weight = torch.load(file_path)
 
+
             def draw(x, s=''):
                 plt.figure()
                 num_bins = 100
@@ -573,11 +496,16 @@ if __name__ == '__main__':
                 plt.ylim([0, n.max() * 1.1])
                 plt.title("ratio={}\nmin={}\nmax={}".format(np.abs((x.min() / x.max())), x.min(), x.max()),
                           fontweight="bold")
-                plt.savefig(os.path.join(load_path_1, 'plt', "{}_{}_{}.png".format(name, s, idx)))
+                time_tuple = time.localtime(time.time())
+
+                plt.savefig(os.path.join(load_path_1, 'plt', "{}_{}_{}.png".format(name, s, time_tuple[3],
+                                                                                   time_tuple[4], time_tuple[5])))
                 plt.close()
+
 
             def mse(x, y):
                 return np.mean(np.square(x - y))
+
 
             def find_mse(x, name):
                 MSE_list = []
@@ -606,6 +534,7 @@ if __name__ == '__main__':
                 lsq_MSE, SAWB_MSE = mse(x, lsq_quant.detach().numpy()), mse(x, SAWB_quant.detach().numpy())
                 print("min mse:{}, lsq mse:{}, SAWB mse:{}".format(min_MSE, lsq_MSE, SAWB_MSE))
 
+
             if input is not None:
                 input_np = input.cpu().detach().numpy().flatten()
                 draw(input_np, "input")
@@ -617,7 +546,6 @@ if __name__ == '__main__':
                 input_np[input_np < input_np[len(input_np) // 500]] = 0
                 draw(input_np, "input_clip")
                 find_mse(input_np, name=name)
-                print('*'*20)
+                print('*' * 20)
             if weight is not None:
                 draw(weight.cpu().detach().numpy().flatten(), "weight")
-

@@ -253,10 +253,12 @@ def parse_args():
     parser.add_argument('--twolayers_gradinputt', '--2gi', type=str2bool, default=False,
                         help='use two 4 bit to simulate a 8 bit')
     parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
-    parser.add_argument('--forward-method', default='PTQ', type=str, metavar='strategy',
-                        choices=['PTQ', 'LSQ', 'LSQplus', 'SAWB'])
+    parser.add_argument('--weight_quant_method', '--wfq', default='ptq', type=str, metavar='strategy',
+                        choices=['uniform', 'lsq', 'ptq'])
+    parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, metavar='strategy',
+                        choices=['uniform', 'lsq', 'ptq'])
     parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
-    parser.add_argument('--clip-value', type=float, default=0, help='Choose a linear layer to quantize')
+    parser.add_argument('--clip-value', type=float, default=100, help='Choose a linear layer to quantize')
     parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
 
 
@@ -297,10 +299,12 @@ def main():
     qconfig.twolayers_gradweight = args.twolayers_gradweight
     qconfig.twolayers_gradinputt = args.twolayers_gradinputt
     qconfig.luq = args.luq
-    qconfig.forward_method = args.forward_method
     qconfig.cutood = args.cutood
     qconfig.clip_value = args.clip_value
     qconfig.choice = args.choice
+
+    qconfig.weight_quant_method = args.weight_quant_method
+    qconfig.input_quant_method = args.input_quant_method
 
     #Todo:end of add something
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
@@ -658,7 +662,8 @@ def main():
             FG, FG_grad = [], qconfig.grads
             l = [module for module in model.modules() if isinstance(module, QLinear)]
             for layers in l:
-                FG.append(layers.weight.grad)
+                FG.append(layers.weight.grad.clone())
+                # print(layers.weight.grad.view(-1)[:5])
 
             qconfig.grads = [[], [], [], []]
             optimizer.zero_grad()
@@ -674,18 +679,18 @@ def main():
             TG, TG_grad = [], qconfig.grads
             l = [module for module in model.modules() if isinstance(module, QLinear)]
             for layers in l:
-                TG.append(layers.weight.grad)
+                TG.append(layers.weight.grad.clone())
+                # print(layers.weight.grad.view(-1)[:5])
 
             print(len(FG), len(TG))
+
             torch.save({"FG": FG, "TG": TG, "FG_grad": FG_grad, "TG_grad": TG_grad}, os.path.join(args.output_dir, '{}epoch.pt'.format(epoch)))
             qconfig.quantize_gradient = args.qg
             optimizer.zero_grad()
             qconfig.grads = None
 
-            for fg, tg in zip(FG, TG):
-                print(fg - tg)
-                break
 
+        print(model, file=open("model.txt", 'a'))
 
         model.train()
         if args.with_tracking:
@@ -826,7 +831,6 @@ def main():
             obj_str3 = json.dumps(dict_time)
             f.write(f'{obj_str3}\n')
 
-            
 
 
 if __name__ == "__main__":
