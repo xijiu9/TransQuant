@@ -336,6 +336,9 @@ class QLinear(nn.Linear):
         self._build_input_clip_val(qconfig.input_quant_method, learnable=(qconfig.input_quant_method == 'lsq'),
                                    init_val=qconfig.clip_value)
 
+        self.is_second = False
+        self.epsilon = None
+
     def _build_weight_clip_val(self, quant_method, learnable, init_val):
         if quant_method == 'uniform':
             # init_val = self.weight.mean().item() + 3 * self.weight.std().item()
@@ -363,6 +366,12 @@ class QLinear(nn.Linear):
         else:
             self.register_buffer('input_clip_val', None)
 
+    def set_first_forward(self):
+        self.is_second = False
+
+    def set_second_forward(self):
+        self.is_second = True
+
     def forward(self, input):
         if not self.first_pass:
             print("Actually Using QLinear!")
@@ -382,6 +391,12 @@ class QLinear(nn.Linear):
                                       symmetric=True,
                                       quant_method=qconfig.weight_quant_method, layerwise=True)
         # quantize input
+        self.x = qweight
+        if self.x.requires_grad:
+            self.x.retain_grad()
+
+        if self.is_second:
+            qweight = qweight + self.epsilon
 
         if qconfig.input_quant_method == 'ptq':
             qinput = self.quantize_input(input)
@@ -416,11 +431,11 @@ class QLinear(nn.Linear):
             f.write('{}\n{}\n{}\n{}\n'.format(x, qx, n, np.unique(qx)))
             f.close()
 
-        with torch.no_grad():
-            if torch.rand(1) < 0.001:
-                draw(input.view(-1).detach().cpu().numpy(), qinput.view(-1).detach().cpu().numpy(), 'input')
-                draw(self.weight.view(-1).detach().cpu().numpy(), qweight.view(-1).detach().cpu().numpy(), 'weight')
-                print("saved!")
+        # with torch.no_grad():
+        #     if torch.rand(1) < 0.001:
+        #         draw(input.view(-1).detach().cpu().numpy(), qinput.view(-1).detach().cpu().numpy(), 'input')
+        #         draw(self.weight.view(-1).detach().cpu().numpy(), qweight.view(-1).detach().cpu().numpy(), 'weight')
+        #         print("saved!")
 
         if hasattr(self, 'exact') or not qconfig.quantize_gradient:
             output = F.linear(qinput, qweight, qbias)

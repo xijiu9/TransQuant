@@ -48,6 +48,7 @@ from transformers import (
 import transformersLocal
 from transformers.utils import get_full_repo_name, send_example_telemetry
 from transformers.utils.versions import require_version
+import matplotlib.pyplot as plt
 
 # import sys
 # sys.path.append("..")
@@ -55,6 +56,7 @@ from transformers.utils.versions import require_version
 import transformersLocal.models.bert.modeling_bert as bertmodels
 from transformersLocal.models.bert.image_classification.preconditioner import init
 from transformersLocal.models.bert.image_classification.quantize import qconfig
+from transformersLocal.models.bert.image_classification.saq import set_second_forward, set_first_forward, SAQ
 
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -225,6 +227,7 @@ def parse_args():
 
     ACT2FNconfig = transformersLocal.activations.ACT2FN.keys()
     parser.add_argument('--ACT2FN', type=str, default='gelu', choices=ACT2FNconfig, help='')
+
     def str2bool(v):
         if isinstance(v, bool):
             return v
@@ -234,7 +237,9 @@ def parse_args():
             return False
         else:
             raise argparse.ArgumentTypeError('Boolean value expected.')
-
+    parser.add_argument('--SAQ', type=str2bool, default=False, help="Whether using SAQ")
+    parser.add_argument("--rho", type=float, default=0.5, help="rho in SAM")
+    parser.add_argument("--lmd", type=float, default=1, help="lambda in SAM")
 
     parser.add_argument('--qa', type=str2bool, default=True, help='quantize activation')
     parser.add_argument('--qw', type=str2bool, default=True, help='quantize weights')
@@ -547,6 +552,7 @@ def main():
         },
     ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    minimizer = SAQ(optimizer, model, rho=args.rho)
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -639,6 +645,7 @@ def main():
             starting_epoch = resume_step // len(train_dataloader)
             resume_step -= starting_epoch * len(train_dataloader)
 
+    lr_plt = []
     for epoch in range(starting_epoch, args.num_train_epochs):
 
         if args.plt_debug:
@@ -707,11 +714,22 @@ def main():
             if args.with_tracking:
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
-            accelerator.backward(loss)
+            accelerator.backward(loss, retain_graph=True)
 
             if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
-                optimizer.step()
+                if args.SAQ:
+                    minimizer.ascent_step()
+                    set_second_forward(model)
+                    #
+                    accelerator.backward((model(**batch).loss / args.gradient_accumulation_steps) * args.lmd / 2 +
+                                         loss * (1 - args.lmd / 2))
+                    minimizer.descent_step()
+                    set_first_forward(model)
+                    # optimizer.step()
+                else:
+                    optimizer.step()
                 lr_scheduler.step()
+                lr_plt.append(lr_scheduler.get_last_lr())
                 optimizer.zero_grad()
                 progress_bar.update(1)
                 completed_steps += 1
@@ -777,17 +795,12 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-
-    # if args.output_dir is not None:
-    #     accelerator.wait_for_everyone()
-    #     unwrapped_model = accelerator.unwrap_model(model)
-    #     unwrapped_model.save_pretrained(
-    #         args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-    #     )
-    #     if accelerator.is_main_process:
-    #         tokenizer.save_pretrained(args.output_dir)
-    #         if args.push_to_hub:
-    #             repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
+        plt.figure()
+        lr_x_plt = torch.linspace(starting_epoch, epoch, steps=len(lr_plt))
+        plt.xlim(0, args.num_train_epochs)
+        plt.ylim(-0.2 * args.learning_rate, 1.2 * args.learning_rate)
+        plt.scatter(lr_x_plt, lr_plt, s=1)
+        plt.savefig(os.path.join(args.output_dir, "lr.png"))
 
     total_flop = sum(p.numel() for p in model.parameters())
     total_flop_learn = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -830,6 +843,7 @@ def main():
             dict_time["time"] = nowtime
             obj_str3 = json.dumps(dict_time)
             f.write(f'{obj_str3}\n')
+
 
 
 

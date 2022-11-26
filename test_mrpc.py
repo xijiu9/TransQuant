@@ -40,6 +40,9 @@ parser.add_argument('--task', type=str, default='mrpc', help='apply LSQ')
 parser.add_argument('--seed', type=int, default=27, help='apply LSQ')
 parser.add_argument("--per_device_train_batch_size", type=int, default=32, help="Batch size (per device) for the training dataloader.",)
 
+parser.add_argument('--SAQ', type=str2bool, default=False, help="Whether using SAQ")
+parser.add_argument("--rho", type=float, default=0.5, help="rho in SAM")
+parser.add_argument("--lmd", type=float, default=1, help="lambda in SAM")
 parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
 parser.add_argument('--clip-value', type=float, default=100, help='Choose a linear layer to quantize')
 parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
@@ -107,10 +110,10 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
           "--bbits {} --bwbits {} --abits {} --wbits {} "
           "--2gw {} --2gi {} --luq {} --weight_quant_method {} --input_quant_method {} "
           " --cutood {} --clip-value {} --ACT2FN {} "
-          "--plt-debug {}"
+          "--plt-debug {} --SAQ {} --rho {} --lmd {} "
           .format(args.task, args.per_device_train_batch_size, args.seed, args.epochs,
                   args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
                   bbits, bwbits, abits, wbits,
                   args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.weight_quant_method, args.input_quant_method,
                   args.cutood, args.clip_value, args.ACT2FN,
-                  args.plt_debug))
+                  args.plt_debug, args.SAQ, args.rho, args.lmd))
