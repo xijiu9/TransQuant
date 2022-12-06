@@ -1,0 +1,70 @@
+Time 2022/11/30 15:18:30:
+task_name cola
+train_file None
+validation_file None
+max_length 128
+pad_to_max_length False
+model_name_or_path bert-base-cased
+use_slow_tokenizer False
+per_device_train_batch_size 32
+per_device_eval_batch_size 8
+learning_rate 2e-05
+weight_decay 0.0
+num_train_epochs 10
+max_train_steps 2680
+gradient_accumulation_steps 1
+lr_scheduler_type SchedulerType.LINEAR
+num_warmup_steps 0
+output_dir ./test_glue_result_quantize/cola/twolayer/choice=quantize_/seed=27
+seed 27
+push_to_hub False
+hub_model_id None
+hub_token None
+checkpointing_steps None
+resume_from_checkpoint None
+with_tracking False
+report_to all
+ignore_mismatched_sizes False
+arch BertForSequenceClassification
+model_config quantize
+choice ['quantize']
+clip_lr 2e-05
+clip_wd 0.0
+ACT2FN gelu
+SAQ False
+rho 0.5
+lmd 1.0
+swa True
+swa_start 6
+swa_lr 0.05
+swa_c_epochs 1
+qa True
+qw True
+qg True
+biased False
+abits 4
+wbits 4
+biasbits 16
+bbits 4
+bwbits 4
+persample False
+hadamard False
+biprecision True
+twolayers_gradweight True
+twolayers_gradinputt True
+luq False
+weight_quant_method lsq
+input_quant_method lsq
+cutood 0
+clip_value 100.0
+plt_debug False
+epoch 0: {'matthews_correlation': -0.020702674026557004}
+epoch 1: {'matthews_correlation': 0.20582991545429727}
+epoch 2: {'matthews_correlation': 0.2920517715695529}
+epoch 3: {'matthews_correlation': 0.3107059817123519}
+epoch 4: {'matthews_correlation': 0.3346035499255382}
+epoch 5: {'matthews_correlation': 0.3317891024296504}
+epoch 6: {'matthews_correlation': 0.37604605057314716}
+epoch 7: {'matthews_correlation': 0.34793236321044063}
+epoch 8: {'matthews_correlation': 0.37338456610577764}
+epoch 9: {'matthews_correlation': 0.37991729674798286}

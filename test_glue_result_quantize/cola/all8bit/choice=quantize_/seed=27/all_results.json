@@ -1,3 +1,3 @@
-{"matthews_correlation": 0.5578770438298012}
-{"training_time": 283.7041537761688, "flop": 108311810, "flop_learn": 108311810}
-{"time": "2022.11.17 23:57:13"}
+{"matthews_correlation": 0.5792266130251226}
+{"training_time": 350.66102957725525, "flop": 108311810, "flop_learn": 108311810}
+{"time": "2022.12.4 19:39:34"}

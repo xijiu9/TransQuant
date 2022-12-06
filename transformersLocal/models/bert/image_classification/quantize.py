@@ -52,6 +52,12 @@ class QuantizationConfig:
 
         self.weight_quant_method = 'LSQ'
         self.input_quant_method = ''
+        self.learnable = True
+        self.lsq_layerwise = True
+        self.lsq_stepshape = 1
+
+        self.change_type = None
+        self.change_threshold = 0
 
     def activation_preconditioner(self):
         # return lambda x: ForwardPreconditioner(x, self.activation_num_bits)
@@ -331,38 +337,42 @@ class QLinear(nn.Linear):
         self.name = name
 
         self.first_pass = False
-        self._build_weight_clip_val(qconfig.weight_quant_method, learnable=(qconfig.weight_quant_method == 'lsq'),
-                                    init_val=qconfig.clip_value)
-        self._build_input_clip_val(qconfig.input_quant_method, learnable=(qconfig.input_quant_method == 'lsq'),
-                                   init_val=qconfig.clip_value)
+        self._build_weight_clip_val(qconfig.weight_quant_method, init_val=qconfig.clip_value)
+        self._build_input_clip_val(qconfig.input_quant_method, init_val=qconfig.clip_value)
 
         self.is_second = False
         self.epsilon = None
 
-    def _build_weight_clip_val(self, quant_method, learnable, init_val):
+    def _build_weight_clip_val(self, quant_method, init_val):
         if quant_method == 'uniform':
             # init_val = self.weight.mean().item() + 3 * self.weight.std().item()
             self.register_buffer('weight_clip_val', torch.tensor([-init_val, init_val]))
-            if learnable:
-                self.weight_clip_val = nn.Parameter(self.weight_clip_val)
-        elif quant_method == 'lsq':
+            self.weight_clip_val = nn.Parameter(self.weight_clip_val)
+        elif quant_method == 'lsq' or qconfig.change_type:
             # TODO: for now we abuse the name for consistent reference in learner.
-            assert learnable, 'LSQ must use leranable step size!'
-            self.weight_clip_val = LsqStepSize(
-                torch.tensor(1.0))  # stepsize will be initialized in the first quantization
+            # assert learnable, 'LSQ must use leranable step size!'
+            if qconfig.lsq_layerwise:
+                self.weight_clip_val = LsqStepSize(
+                    torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
+            else:
+                self.weight_clip_val = LsqStepSize(
+                    torch.tensor(torch.ones(qconfig.lsq_stepshape), requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
         else:
             self.register_buffer('weight_clip_val', None)
 
-    def _build_input_clip_val(self, quant_method, learnable, init_val):
+    def _build_input_clip_val(self, quant_method, init_val):
         if quant_method == 'uniform':
             self.register_buffer('input_clip_val', torch.tensor([-init_val, init_val]))
-            if learnable:
-                self.input_clip_val = nn.Parameter(self.input_clip_val)
-        elif quant_method == 'lsq':
+            self.input_clip_val = nn.Parameter(self.input_clip_val)
+        elif quant_method == 'lsq' or qconfig.change_type:
             # TODO: for now we abuse the name for consistent reference in learner.
-            assert learnable, 'LSQ must use learnable step size!'
-            self.input_clip_val = LsqStepSize(
-                torch.tensor(1.0))  # stepsize will be initialized in the first quantization
+            # assert learnable, 'LSQ must use learnable step size!'
+            if qconfig.lsq_layerwise:
+                self.input_clip_val = LsqStepSize(
+                    torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
+            else:
+                self.input_clip_val = LsqStepSize(
+                    torch.tensor(torch.ones(qconfig.lsq_stepshape), requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
         else:
             self.register_buffer('input_clip_val', None)
 
@@ -389,7 +399,7 @@ class QLinear(nn.Linear):
         else:
             qweight = weight_quant_fn(self.weight, self.weight_clip_val, num_bits=qconfig.weight_num_bits,
                                       symmetric=True,
-                                      quant_method=qconfig.weight_quant_method, layerwise=True)
+                                      quant_method=qconfig.weight_quant_method, layerwise=qconfig.lsq_layerweise, learnable=qconfig.learnable)
         # quantize input
         self.x = qweight
         if self.x.requires_grad:
@@ -403,7 +413,7 @@ class QLinear(nn.Linear):
         else:
             qinput = act_quant_fn(input, self.input_clip_val, num_bits=qconfig.activation_num_bits,
                                   symmetric=(self.name != 'addNorm_nsy'),
-                                  quant_method=qconfig.input_quant_method, layerwise=True)
+                                  quant_method=qconfig.input_quant_method, layerwise=qconfig.lsq_layerweise, learnable=qconfig.learnable)
 
         qbias = self.bias
 
@@ -441,7 +451,7 @@ class QLinear(nn.Linear):
             output = F.linear(qinput, qweight, qbias)
         else:
             output = linear_act.apply(qinput, qweight, qbias)
-
+        # print(qinput.shape, qweight.shape, output.shape)
         return output
 
 
@@ -454,19 +464,23 @@ class QIdentity(nn.Identity):
 
         self.quantize_input = QuantMeasure()
         self.first_pass = False
-        self._build_embed_clip_val(qconfig.weight_quant_method, learnable=(qconfig.weight_quant_method == 'lsq'),
-                                   init_val=qconfig.clip_value)
+        self._build_embed_clip_val(qconfig.weight_quant_method, init_val=qconfig.clip_value)
 
-    def _build_embed_clip_val(self, quant_method, learnable, init_val):
+    def _build_embed_clip_val(self, quant_method, init_val):
+        # print(quant_method, init_val, qconfig.change_type)
+        # print('!'*1000)
         if quant_method == 'uniform':
             self.register_buffer('embed_clip_val', torch.tensor([-init_val, init_val]))
-            if learnable:
-                self.embed_clip_val = nn.Parameter(self.embed_clip_val)
-        elif quant_method == 'lsq':
+            self.embed_clip_val = nn.Parameter(self.embed_clip_val)
+        elif quant_method == 'lsq' or qconfig.change_type:
             # TODO: for now we abuse the name for consistent reference in learner.
-            assert learnable, 'LSQ must use learnable step size!'
-            self.embed_clip_val = LsqStepSize(
-                torch.tensor(1.0))  # stepsize will be initialized in the first quantization
+            # assert learnable, 'LSQ must use learnable step size!'
+            if qconfig.lsq_layerwise:
+                self.embed_clip_val = LsqStepSize(
+                    torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
+            else:
+                self.embed_clip_val = LsqStepSize(
+                    torch.tensor(torch.ones(qconfig.lsq_stepshape), requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
         else:
             self.register_buffer('embed_clip_val', None)
 
@@ -474,12 +488,13 @@ class QIdentity(nn.Identity):
         if not self.first_pass:
             print("Actually Using QIdentity!")
             self.first_pass = True
-
+            torch.set_printoptions(precision=10)
+        # print(self.embed_clip_val)
         if qconfig.weight_quant_method == 'ptq':
             qinput = quantize(input, qconfig.weight_preconditioner())
         else:
             qinput = weight_quant_fn(input, self.embed_clip_val, num_bits=qconfig.weight_num_bits, symmetric=True,
-                                     quant_method=qconfig.weight_quant_method, layerwise=True)
+                                     quant_method=qconfig.weight_quant_method, layerwise=qconfig.lsq_layerweise, learnable=qconfig.learnable)
 
         if hasattr(self, 'exact') or not qconfig.quantize_gradient:
             output = qinput

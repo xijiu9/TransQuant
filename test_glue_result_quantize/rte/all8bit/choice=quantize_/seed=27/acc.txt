@@ -1,0 +1,68 @@
+Time 2022/12/04 19:34:11:
+task_name rte
+train_file None
+validation_file None
+max_length 128
+pad_to_max_length False
+model_name_or_path bert-base-cased
+use_slow_tokenizer False
+per_device_train_batch_size 64
+per_device_eval_batch_size 8
+learning_rate 4e-05
+weight_decay 0.0
+num_train_epochs 6
+max_train_steps 234
+gradient_accumulation_steps 1
+lr_scheduler_type SchedulerType.LINEAR
+num_warmup_steps 0
+output_dir ./test_glue_result_quantize/rte/all8bit/choice=quantize_/seed=27
+seed 27
+push_to_hub False
+hub_model_id None
+hub_token None
+checkpointing_steps None
+resume_from_checkpoint None
+with_tracking False
+report_to all
+ignore_mismatched_sizes False
+arch BertForSequenceClassification
+model_config quantize
+choice ['quantize']
+clip_lr 4e-05
+clip_wd 0.0
+ACT2FN gelu
+SAQ False
+rho 0.5
+lmd 1.0
+swa False
+swa_start 6
+swa_lr 0.05
+swa_c_epochs 1
+qa True
+qw True
+qg True
+biased False
+abits 8
+wbits 8
+biasbits 16
+bbits 8
+bwbits 8
+persample False
+hadamard False
+biprecision True
+twolayers_gradweight False
+twolayers_gradinputt False
+luq False
+weight_quant_method ptq
+input_quant_method ptq
+cutood 0
+clip_value 100.0
+plt_debug False
+change_type None
+change_threshold 0
+epoch 0: {'accuracy': 0.5812274368231047}
+epoch 1: {'accuracy': 0.5956678700361011}
+epoch 2: {'accuracy': 0.6173285198555957}
+epoch 3: {'accuracy': 0.6245487364620939}
+epoch 4: {'accuracy': 0.6534296028880866}
+epoch 5: {'accuracy': 0.6498194945848376}

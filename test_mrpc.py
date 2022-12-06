@@ -20,6 +20,10 @@ parser.add_argument('--weight_quant_method', '--wfq', default='ptq', type=str, m
                     choices=['uniform', 'lsq', 'ptq'])
 parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, metavar='strategy',
                     choices=['uniform', 'lsq', 'ptq'])
+parser.add_argument('--learnable', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
+parser.add_argument('--lsq_layerwise', type=str2bool, default=True,
+                    help='Debug to draw the variance and leverage score')
+
 parser.add_argument('--ACT2FN', type=str, default='gelu', help='')
 parser.add_argument('--luq', type=str2bool, default=False, help='use luq for backward')
 parser.add_argument('--training-bit', type=str, default='', help='weight number of bits', required=True,
@@ -38,14 +42,25 @@ parser.add_argument('--weight-decay', default=1e-4, type=float, metavar='N',
 
 parser.add_argument('--task', type=str, default='mrpc', help='apply LSQ')
 parser.add_argument('--seed', type=int, default=27, help='apply LSQ')
-parser.add_argument("--per_device_train_batch_size", type=int, default=32, help="Batch size (per device) for the training dataloader.",)
+parser.add_argument("--per_device_train_batch_size", '--pdtbs', type=int, default=32, help="Batch size (per device) for the training dataloader.",)
+parser.add_argument("--lr", type=float, default=2e-5, help="Initial learning rate (after the potential warmup period) to use.",)
 
+parser.add_argument('--swa', type=str2bool, default=False, help="Whether using SWA")
 parser.add_argument('--SAQ', type=str2bool, default=False, help="Whether using SAQ")
 parser.add_argument("--rho", type=float, default=0.5, help="rho in SAM")
 parser.add_argument("--lmd", type=float, default=1, help="lambda in SAM")
 parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
 parser.add_argument('--clip-value', type=float, default=100, help='Choose a linear layer to quantize')
 parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
+parser.add_argument('--clip_lr', default=2e-5, type=float, help='Use a seperate lr for clip_vals / stepsize')
+parser.add_argument('--clip_wd', default=0.0, type=float, help='weight decay for clip_vals / stepsize')
+
+parser.add_argument("--resume_from_checkpoint", '--rfc', type=str, default=None, help="If the training should continue from a checkpoint folder.")
+parser.add_argument("--checkpointing_steps", '--cs', type=str, default=None, help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",)
+
+parser.add_argument("--change_type", type=str, default=None, help="of every n steps, or 'epoch' for each epoch.",)
+parser.add_argument("--change_threshold", type=float, default=0, help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",)
+
 
 args = parser.parse_args()
 
@@ -102,18 +117,42 @@ for cho in args.choice:
     arg_choice_without_space += cho + '_'
 argchoice = argchoice[:-1]
 
+resume_from_checkpoint = ''
+if args.resume_from_checkpoint:
+    # resume_from_checkpoint = '--resume_from_checkpoint ./test_glue_result_quantize/{}/{}/choice={}/seed={}/{}'\
+    #     .format(args.task, method, arg_choice_without_space, args.seed, args.resume_from_checkpoint)
+    resume_from_checkpoint = '--resume_from_checkpoint ./test_glue_result_quantize/{}/all8bit/choice={}/seed={}/{}'\
+        .format(args.task, arg_choice_without_space, args.seed, args.resume_from_checkpoint)
+    # resume_from_checkpoint = '--resume_from_checkpoint ./test_glue_result_quantize/{}/exact/choice=classic_/seed={}/{}'\
+    #     .format(args.task, args.seed, args.resume_from_checkpoint)
+
+checkpointing_steps = ''
+if args.checkpointing_steps:
+    checkpointing_steps = '--checkpointing_steps epoch'
+
+output_dir = './test_glue_result_quantize/{}/{}/choice={}/seed={}'\
+    .format(args.task, method, arg_choice_without_space, args.seed)
+
+change_bit = ''
+if args.change_type and args.change_threshold > 0:
+    change_bit = '--change_type {} --change_threshold {}'.format(args.change_type, args.change_threshold)
+
 def op_None(x):
     return "None" if x is None else x
 os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased --task_name {} --max_length 128 "
-          "--per_device_train_batch_size {} --learning_rate 2e-5 --seed {} --num_train_epochs {} "
-          "--output_dir ./test_glue_result_quantize/{}/{}/choice={}/seed={} --arch BertForSequenceClassification {} --choice {} "
+          "--per_device_train_batch_size {} --learning_rate {} --seed {} --num_train_epochs {} "
+          "--output_dir {} --arch BertForSequenceClassification {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
-          "--2gw {} --2gi {} --luq {} --weight_quant_method {} --input_quant_method {} "
+          "--2gw {} --2gi {} --luq {} "
+          "--weight_quant_method {} --input_quant_method {} --learnable {} --lsq_layerwise {} "
           " --cutood {} --clip-value {} --ACT2FN {} "
-          "--plt-debug {} --SAQ {} --rho {} --lmd {} "
-          .format(args.task, args.per_device_train_batch_size, args.seed, args.epochs,
-                  args.task, method, arg_choice_without_space, args.seed, arg, argchoice,
+          "--plt-debug {} --swa {} --SAQ {} --rho {} --lmd {} "
+          "--clip_lr {} --clip_wd {} {} {} {}"
+          .format(args.task, args.per_device_train_batch_size, args.lr, args.seed, args.epochs,
+                  output_dir, arg, argchoice,
                   bbits, bwbits, abits, wbits,
-                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq, args.weight_quant_method, args.input_quant_method,
+                  args.twolayers_gradweight, args.twolayers_gradinputt, args.luq,
+                  args.weight_quant_method, args.input_quant_method, args.learnable, args.lsq_layerwise,
                   args.cutood, args.clip_value, args.ACT2FN,
-                  args.plt_debug, args.SAQ, args.rho, args.lmd))
+                  args.plt_debug, args.swa, args.SAQ, args.rho, args.lmd,
+                  args.clip_lr, args.clip_wd, checkpointing_steps, resume_from_checkpoint, change_bit))

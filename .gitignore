@@ -12,3 +12,5 @@
 /bert-glue/tmp/*
 /bert-glue/run_*
 *.pt
+*.bin
+*.pkl

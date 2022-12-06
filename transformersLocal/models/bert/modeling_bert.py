@@ -190,10 +190,11 @@ class BertBuilder(object):
             'attention': {"attention", "linear", "quantize"} & set(choice),
             'addNorm': {"addNorm", "linear", "quantize"} & set(choice),
             'feedForward': {"feedForward", "linear", "quantize"} & set(choice),
-            'pooler': {"pooler", "linear", "quantize"} & set(choice)
+            'pooler': {"pooler", "linear", "quantize"} & set(choice),
+            'classifier': {"classifier"} & set(choice)
         }
         print(self.choice)
-        if not set(choice).issubset({"embedding", "attention", "addNorm", "feedForward", "pooler",
+        if not set(choice).issubset({"embedding", "attention", "addNorm", "feedForward", "pooler", "classifier",
                                      "linear", "quantize", "classic"}):
             print("invalid choice {}".format(choice))
             exit(0)
@@ -1573,7 +1574,10 @@ class BertForSequenceClassification(BertPreTrainedModel):
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        if builder.choice['classifier']:
+            self.classifier = builder.linear(config.hidden_size, config.num_labels, name='classifier')
+        else:
+            self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1676,7 +1680,10 @@ class BertForMultipleChoice(BertPreTrainedModel):
         )
         self.dropout = nn.Dropout(classifier_dropout)
         # self.classifier = nn.Linear(config.hidden_size, 1)
-        self.classifier = nn.Linear(config.hidden_size, 1)
+        if builder.choice['classifier']:
+            self.classifier = builder.linear(config.hidden_size, 1, name='classifier')
+        else:
+            self.classifier = nn.Linear(config.hidden_size, 1)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1774,7 +1781,10 @@ class BertForTokenClassification(BertPreTrainedModel):
         )
         self.dropout = nn.Dropout(classifier_dropout)
         # self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        if builder.choice['classifier']:
+            self.classifier = builder.linear(config.hidden_size, config.num_labels, name='classifier')
+        else:
+            self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1856,7 +1866,11 @@ class BertForQuestionAnswering(BertPreTrainedModel):
 
         self.bert = BertModel(config, add_pooling_layer=False, builder=builder)
 
-        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+        # self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+        if builder.choice['classifier']:
+            self.qa_outputs = builder.linear(config.hidden_size, config.num_labels, name='classifier')
+        else:
+            self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
         # Initialize weights and apply final processing
         self.post_init()
 

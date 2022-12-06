@@ -1,0 +1,68 @@
+Time 2022/12/04 19:34:09:
+task_name stsb
+train_file None
+validation_file None
+max_length 128
+pad_to_max_length False
+model_name_or_path bert-base-cased
+use_slow_tokenizer False
+per_device_train_batch_size 64
+per_device_eval_batch_size 8
+learning_rate 4e-05
+weight_decay 0.0
+num_train_epochs 6
+max_train_steps 540
+gradient_accumulation_steps 1
+lr_scheduler_type SchedulerType.LINEAR
+num_warmup_steps 0
+output_dir ./test_glue_result_quantize/stsb/all8bit/choice=quantize_/seed=27
+seed 27
+push_to_hub False
+hub_model_id None
+hub_token None
+checkpointing_steps None
+resume_from_checkpoint None
+with_tracking False
+report_to all
+ignore_mismatched_sizes False
+arch BertForSequenceClassification
+model_config quantize
+choice ['quantize']
+clip_lr 4e-05
+clip_wd 0.0
+ACT2FN gelu
+SAQ False
+rho 0.5
+lmd 1.0
+swa False
+swa_start 6
+swa_lr 0.05
+swa_c_epochs 1
+qa True
+qw True
+qg True
+biased False
+abits 8
+wbits 8
+biasbits 16
+bbits 8
+bwbits 8
+persample False
+hadamard False
+biprecision True
+twolayers_gradweight False
+twolayers_gradinputt False
+luq False
+weight_quant_method ptq
+input_quant_method ptq
+cutood 0
+clip_value 100.0
+plt_debug False
+change_type None
+change_threshold 0
+epoch 0: {'pearson': 0.7874468570830704, 'spearmanr': 0.7858720889843152}
+epoch 1: {'pearson': 0.8609210688888481, 'spearmanr': 0.8558799788100594}
+epoch 2: {'pearson': 0.8681373241050765, 'spearmanr': 0.8647375525226771}
+epoch 3: {'pearson': 0.8677757594641793, 'spearmanr': 0.8667277015793948}
+epoch 4: {'pearson': 0.8729131049691865, 'spearmanr': 0.8700703319941164}
+epoch 5: {'pearson': 0.8724994851580146, 'spearmanr': 0.8691031345920016}

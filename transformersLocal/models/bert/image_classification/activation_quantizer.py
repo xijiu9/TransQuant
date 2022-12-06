@@ -153,7 +153,7 @@ class SymLsqQuantizer(torch.autograd.Function):
         https://arxiv.org/abs/1902.08153
     """
     @staticmethod
-    def forward(ctx, input, alpha, num_bits, layerwise):
+    def forward(ctx, input, alpha, num_bits, layerwise, learnable):
         """
         :param input: input to be quantized
         :param alpha: the step size
@@ -173,12 +173,12 @@ class SymLsqQuantizer(torch.autograd.Function):
 
         assert alpha > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
         if alpha.item() == 1.0 and (not alpha.initialized):
-            alpha.initialize_wrapper(input, num_bits, symmetric=True, init_method='default')
+            alpha.initialize_wrapper(input, num_bits, symmetric=True, init_method='default', layerwise=layerwise)
 
         grad_scale = 1.0 / math.sqrt(input.numel() * Qp)
         # grad_scale = 1.0
         ctx.save_for_backward(input, alpha)
-        ctx.other = grad_scale, Qn, Qp
+        ctx.other = grad_scale, Qn, Qp, learnable
         q_w = (input / alpha).round().clamp(Qn, Qp)
         w_q = q_w * alpha
         return w_q
@@ -189,7 +189,7 @@ class SymLsqQuantizer(torch.autograd.Function):
             return grad_output, None, None, None
 
         input_, alpha = ctx.saved_tensors
-        grad_scale, Qn, Qp = ctx.other
+        grad_scale, Qn, Qp, learnable = ctx.other
         q_w = input_ / alpha
         indicate_small = (q_w < Qn).float()
         indicate_big = (q_w > Qp).float()
@@ -197,7 +197,11 @@ class SymLsqQuantizer(torch.autograd.Function):
         grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
                 -q_w + q_w.round())) * grad_output * grad_scale).sum().unsqueeze(dim=0)
         grad_input = indicate_middle * grad_output
-        return grad_input, grad_alpha, None, None
+
+        if learnable:
+            return grad_input, grad_alpha, None, None, None
+        else:
+            return grad_input, None, None, None, None
 
 
 class AsymLsqQuantizer(torch.autograd.Function):
@@ -205,7 +209,7 @@ class AsymLsqQuantizer(torch.autograd.Function):
         Asymetric LSQ quantization. Modified from LSQ.
     """
     @staticmethod
-    def forward(ctx, input, alpha, num_bits, layerwise):
+    def forward(ctx, input, alpha, num_bits, layerwise, learnable):
         """
         :param input: input to be quantized
         :param alpha: the step size
@@ -228,12 +232,12 @@ class AsymLsqQuantizer(torch.autograd.Function):
 
         assert alpha > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
         if alpha.item() == 1.0 and (not alpha.initialized):
-            alpha.initialize_wrapper(input, num_bits, symmetric=False, init_method='default')
+            alpha.initialize_wrapper(input, num_bits, symmetric=False, init_method='default', layerwise=layerwise)
 
         grad_scale = 1.0 / math.sqrt(input.numel() * Qp)
         # grad_scale = 1.0
         ctx.save_for_backward(input_, alpha)
-        ctx.other = grad_scale, Qn, Qp
+        ctx.other = grad_scale, Qn, Qp, learnable
         q_w = (input_ / alpha).round().clamp(Qn, Qp)
         w_q = q_w * alpha
         w_q = w_q + min_val
@@ -245,7 +249,7 @@ class AsymLsqQuantizer(torch.autograd.Function):
             return grad_output, None, None, None
 
         input_, alpha = ctx.saved_tensors
-        grad_scale, Qn, Qp = ctx.other
+        grad_scale, Qn, Qp, learnable = ctx.other
         q_w = input_ / alpha
         indicate_small = (q_w < Qn).float()
         indicate_big = (q_w > Qp).float()
@@ -253,8 +257,11 @@ class AsymLsqQuantizer(torch.autograd.Function):
         grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
                 -q_w + q_w.round())) * grad_output * grad_scale).sum().unsqueeze(dim=0)
         grad_input = indicate_middle * grad_output
-        return grad_input, grad_alpha, None, None
 
+        if learnable:
+            return grad_input, grad_alpha, None, None, None
+        else:
+            return grad_input, None, None, None, None
 class LsqStepSize(nn.Parameter):
     def __init__(self, tensor):
         super(LsqStepSize, self).__new__(nn.Parameter, data=tensor)
@@ -266,19 +273,25 @@ class LsqStepSize(nn.Parameter):
         # print('Stepsize initialized to %.6f' % self.data.item())
         self.initialized = True
 
-    def initialize_wrapper(self, tensor, num_bits, symmetric, init_method='default'):
+    def initialize_wrapper(self, tensor, num_bits, symmetric, init_method='default', layerwise=True):
         # input: everthing needed to initialize step_size
         Qp = 2 ** (num_bits - 1) - 1 if symmetric else 2 ** (num_bits) - 1
-        if init_method == 'default':
-            init_val = 2 * tensor.abs().mean() / math.sqrt(Qp) if symmetric \
-                else 4 * tensor.abs().mean() / math.sqrt(Qp)
-        elif init_method == 'uniform':
-            init_val = 1./(2*Qp+1) if symmetric else 1./Qp
-
+        if layerwise:
+            if init_method == 'default':
+                init_val = 2 * tensor.abs().mean() / math.sqrt(Qp) if symmetric \
+                    else 4 * tensor.abs().mean() / math.sqrt(Qp)
+            elif init_method == 'uniform':
+                init_val = 1./(2*Qp+1) if symmetric else 1./Qp
+        else:
+            if init_method == 'default':
+                init_val = 2 * tensor.abs().mean(dim=(0, 1)) / math.sqrt(Qp) if symmetric \
+                    else 4 * tensor.abs().mean(dim=(0, 1)) / math.sqrt(Qp)
+            elif init_method == 'uniform':
+                init_val = 1./(2*Qp+1) if symmetric else 1./Qp
         self._initialize(init_val)
 
 
-def act_quant_fn(input, clip_val, num_bits, symmetric, quant_method, layerwise):
+def act_quant_fn(input, clip_val, num_bits, symmetric, quant_method, layerwise, learnable):
     if num_bits == 32:
         return input
 
@@ -293,12 +306,12 @@ def act_quant_fn(input, clip_val, num_bits, symmetric, quant_method, layerwise):
     else:
         raise ValueError("Unknownquant_method")
 
-    input = quant_fn.apply(input, clip_val, num_bits, layerwise)
+    input = quant_fn.apply(input, clip_val, num_bits, layerwise, learnable)
 
     return input
 
 
-def weight_quant_fn(weight,  clip_val,  num_bits,  symmetric, quant_method, layerwise):
+def weight_quant_fn(weight,  clip_val,  num_bits,  symmetric, quant_method, layerwise, learnable):
     if num_bits == 32:
         return weight
 
@@ -313,7 +326,7 @@ def weight_quant_fn(weight,  clip_val,  num_bits,  symmetric, quant_method, laye
     else:
         raise ValueError("Unknown quant_method")
 
-    weight = quant_fn.apply(weight, clip_val,  num_bits, layerwise)
+    weight = quant_fn.apply(weight, clip_val,  num_bits, layerwise, learnable)
     return weight
 
 

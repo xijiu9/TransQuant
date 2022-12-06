@@ -30,6 +30,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from datetime import datetime
 
+from copy import deepcopy, copy
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -57,6 +58,7 @@ import transformersLocal.models.bert.modeling_bert as bertmodels
 from transformersLocal.models.bert.image_classification.preconditioner import init
 from transformersLocal.models.bert.image_classification.quantize import qconfig
 from transformersLocal.models.bert.image_classification.saq import set_second_forward, set_first_forward, SAQ
+from transformersLocal.models.bert.image_classification.swa import moving_average
 
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -204,7 +206,7 @@ def parse_args():
         action="store_true",
         help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
     )
-    
+
     #Todo:添加的任务所需参数
     model_names = bertmodels.bert_versions.keys()
     model_configs = bertmodels.bert_configs.keys()
@@ -224,6 +226,8 @@ def parse_args():
     #classic(都不量化), embedding(填充层), attention, addNorm, feedForward, pooler, classifier, linear(量化全部线性层), quantize(以上所有)
 
     parser.add_argument('--choice', nargs='+', type=str, help='Choose a linear layer to quantize')
+    parser.add_argument('--clip_lr', default=2e-4, type=float, help='Use a seperate lr for clip_vals / stepsize')
+    parser.add_argument('--clip_wd', default=0.0, type=float, help='weight decay for clip_vals / stepsize')
 
     ACT2FNconfig = transformersLocal.activations.ACT2FN.keys()
     parser.add_argument('--ACT2FN', type=str, default='gelu', choices=ACT2FNconfig, help='')
@@ -240,6 +244,13 @@ def parse_args():
     parser.add_argument('--SAQ', type=str2bool, default=False, help="Whether using SAQ")
     parser.add_argument("--rho", type=float, default=0.5, help="rho in SAM")
     parser.add_argument("--lmd", type=float, default=1, help="lambda in SAM")
+
+    parser.add_argument('--swa', type=str2bool, default=False, help='swa usage flag (default: off)')
+    parser.add_argument('--swa_start', type=float, default=6, metavar='N',
+                        help='SWA start epoch number (default: 161)')
+    parser.add_argument('--swa_lr', type=float, default=0.05, metavar='LR', help='SWA LR (default: 0.05)')
+    parser.add_argument('--swa_c_epochs', type=int, default=1, metavar='N',
+                        help='SWA model collection frequency/cycle length in epochs (default: 1)')
 
     parser.add_argument('--qa', type=str2bool, default=True, help='quantize activation')
     parser.add_argument('--qw', type=str2bool, default=True, help='quantize weights')
@@ -262,10 +273,16 @@ def parse_args():
                         choices=['uniform', 'lsq', 'ptq'])
     parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, metavar='strategy',
                         choices=['uniform', 'lsq', 'ptq'])
+    parser.add_argument('--learnable', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
+    parser.add_argument('--lsq_layerwise', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
+
     parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
     parser.add_argument('--clip-value', type=float, default=100, help='Choose a linear layer to quantize')
     parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
 
+    parser.add_argument("--change_type", type=str, default=None, help="of every n steps, or 'epoch' for each epoch.", )
+    parser.add_argument("--change_threshold", type=float, default=0,
+                        help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.", )
 
     #Todo:添加参数部分到此结束
     args = parser.parse_args()
@@ -310,6 +327,13 @@ def main():
 
     qconfig.weight_quant_method = args.weight_quant_method
     qconfig.input_quant_method = args.input_quant_method
+    qconfig.learnable = args.learnable
+    qconfig.lsq_layerwise = lsq_layerwise
+    if args.lsq_layerwise:
+        qconfig.lsq_stepshape = [args.per_device_train_batch_size, args.max_length]
+
+    qconfig.change_type = args.change_type
+    qconfig.change_threshold = args.change_threshold
 
     #Todo:end of add something
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
@@ -430,7 +454,7 @@ def main():
         ignore_mismatched_sizes=args.ignore_mismatched_sizes,
     )
     print("pretrainedModel.num_label is:",PreTrainedModel.num_labels)
-    
+
     pretrained_dict = PreTrainedModel.state_dict()
 
     print("*" * 100, args.choice, "*" * 100)
@@ -438,12 +462,16 @@ def main():
     config.hidden_act = args.ACT2FN
     model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
     print("model.num_label is:",model.num_labels)
-    
+
     model_dict = model.state_dict()
     pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if (key in model_dict and 'classifier' not in key)}
 
     model.load_state_dict(pretrained_dict_part, strict=False)
 
+    if args.swa:
+        swa_model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
+        swa_model = swa_model.to('cuda')
+        swa_n = 0
     # Preprocessing the datasets
     if args.task_name is not None:
         sentence1_key, sentence2_key = task_to_keys[args.task_name]
@@ -538,21 +566,39 @@ def main():
     )
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
+
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
+    param_optimizer = list(model.named_parameters())
+    clip_params = {}
+    for k, v in param_optimizer:
+        if 'clip_' in k:
+            clip_params[k] = v
+
+
     optimizer_grouped_parameters = [
         {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and not 'clip_' in n],
             "weight_decay": args.weight_decay,
         },
         {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and not 'clip_' in n],
             "weight_decay": 0.0,
+        },
+        {
+            "params": [p for n, p in clip_params.items()],
+            "lr": args.clip_lr,
+            "weight_decay": args.clip_wd,
         },
     ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
-    minimizer = SAQ(optimizer, model, rho=args.rho)
+
+    if args.SAQ:
+        minimizer = SAQ(optimizer, model, rho=args.rho)
+
+    # if args.swa:
+    #     swa_scheduler = SWALR(optimizer, swa_lr=0.05)
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -616,8 +662,19 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+
+    file_to_delete = open(os.path.join(args.output_dir, "acc.txt"), "w")
+    file_to_delete.close()
+    with open(os.path.join(args.output_dir, "acc.txt"), "a") as f:
+        time_tuple = time.localtime(time.time())
+        print('Time {}/{:02d}/{:02d} {:02d}:{:02d}:{:02d}:'
+              .format(time_tuple[0], time_tuple[1], time_tuple[2], time_tuple[3],
+                      time_tuple[4], time_tuple[5]), file=f)
     for arg in vars(args):
         print(arg, getattr(args, arg))
+        with open(os.path.join(args.output_dir, "acc.txt"), "a") as f:
+            print(arg, getattr(args, arg), file=f)
+
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     start_time = time.time()
@@ -627,7 +684,13 @@ def main():
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint is not None or args.resume_from_checkpoint != "":
             accelerator.print(f"Resumed from checkpoint: {args.resume_from_checkpoint}")
-            accelerator.load_state(args.resume_from_checkpoint)
+            # accelerator.load_state(args.resume_from_checkpoint)
+            pretrained_dict = torch.load(os.path.join(args.resume_from_checkpoint, 'pytorch_model.bin'))
+            model_dict = model.state_dict()
+            pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if
+                                    (key in model_dict and 'classifier' not in key)}
+            model.load_state_dict(pretrained_dict_part, strict=False)
+
             path = os.path.basename(args.resume_from_checkpoint)
         else:
             # Get the most recent checkpoint
@@ -638,7 +701,8 @@ def main():
         training_difference = os.path.splitext(path)[0]
 
         if "epoch" in training_difference:
-            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+            # starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+            starting_epoch = 0
             resume_step = None
         else:
             resume_step = int(training_difference.replace("step_", ""))
@@ -646,6 +710,11 @@ def main():
             resume_step -= starting_epoch * len(train_dataloader)
 
     lr_plt = []
+    train_loss_x_plt = []
+    train_loss_y_plt = []
+    valid_loss_x_plt = []
+    valid_loss_y_plt = []
+
     for epoch in range(starting_epoch, args.num_train_epochs):
 
         if args.plt_debug:
@@ -708,6 +777,27 @@ def main():
                 if resume_step is not None and step < resume_step:
                     completed_steps += 1
                     continue
+            finish_precent = epoch + step / len(train_dataloader)
+            past_precent = epoch + (step - 1) / len(train_dataloader)
+            if args.change_type and args.change_threshold > 0:
+                if finish_precent >= args.change_threshold and past_precent < args.change_threshold:
+                    qconfig.quantize_activation, qconfig.quantize_weights, qconfig.quantize_gradient, \
+                    qconfig.activation_num_bits, qconfig.weight_num_bits, \
+                    qconfig.backward_num_bits, qconfig.bweight_num_bits = args.change_type[0], args.change_type[1], \
+                    args.change_type[2], int(args.change_type[3]), int(args.change_type[4]), \
+                    int(args.change_type[6]), int(args.change_type[5])
+
+                    if qconfig.activation_num_bits == 8:
+                        qconfig.input_quant_method = 'ptq'
+                    elif qconfig.activation_num_bits == 4:
+                        qconfig.input_quant_method = 'lsq'
+                    if qconfig.weight_num_bits == 8:
+                        qconfig.weight_quant_method = 'ptq'
+                    elif qconfig.activation_num_bits == 4:
+                        qconfig.weight_quant_method = 'lsq'
+
+                    print("make some changes!")
+
             outputs = model(**batch)
             loss = outputs.loss
             # We keep track of the loss at each epoch
@@ -715,6 +805,9 @@ def main():
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss, retain_graph=True)
+
+            train_loss_x_plt.append(epoch + step / len(train_dataloader))
+            train_loss_y_plt.append(loss.detach().cpu().numpy().item())
 
             if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 if args.SAQ:
@@ -729,7 +822,7 @@ def main():
                 else:
                     optimizer.step()
                 lr_scheduler.step()
-                lr_plt.append(lr_scheduler.get_last_lr())
+                lr_plt.append(lr_scheduler.get_last_lr()[0])
                 optimizer.zero_grad()
                 progress_bar.update(1)
                 completed_steps += 1
@@ -746,9 +839,11 @@ def main():
 
         model.eval()
         samples_seen = 0
+        valid_loss = []
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
                 outputs = model(**batch)
+                valid_loss.append(outputs.loss.detach().cpu().numpy().item())
             predictions = outputs.logits.argmax(dim=-1) if not is_regression else outputs.logits.squeeze()
             predictions, references = accelerator.gather((predictions, batch["labels"]))
             # If we are in a multiprocess environment, the last batch has duplicates
@@ -762,8 +857,11 @@ def main():
                 predictions=predictions,
                 references=references,
             )
+        valid_loss_x_plt.append(epoch + 1)
+        valid_loss_y_plt.append(sum(valid_loss) / len(valid_loss))
 
         eval_metric = metric.compute()
+        print("what the fuck")
         logger.info(f"epoch {epoch}: {eval_metric}")
 
         if args.with_tracking:
@@ -795,12 +893,60 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-        plt.figure()
-        lr_x_plt = torch.linspace(starting_epoch, epoch, steps=len(lr_plt))
+
+        if args.swa and (epoch + 1) >= args.swa_start and (epoch + 1 - args.swa_start) % args.swa_c_epochs == 0:
+            moving_average(swa_model, model, 1.0 / (swa_n + 1))
+            swa_n += 1
+
+            swa_model.eval()
+            swa_samples_seen = 0
+            swa_valid_loss = []
+            for step, batch in enumerate(eval_dataloader):
+                with torch.no_grad():
+                    swa_outputs = swa_model(**batch)
+                    swa_valid_loss.append(swa_outputs.loss.detach().cpu().numpy().item())
+                swa_predictions = swa_outputs.logits.argmax(dim=-1) if not is_regression else swa_outputs.logits.squeeze()
+                swa_predictions, references = accelerator.gather((swa_predictions, batch["labels"]))
+                # If we are in a multiprocess environment, the last batch has duplicates
+                if accelerator.num_processes > 1:
+                    if step == len(eval_dataloader) - 1:
+                        swa_predictions = swa_predictions[: len(eval_dataloader.dataset) - swa_samples_seen]
+                        references = references[: len(eval_dataloader.dataset) - swa_samples_seen]
+                    else:
+                        samples_seen += references.shape[0]
+                metric.add_batch(
+                    predictions=swa_predictions,
+                    references=references,
+                )
+            valid_loss_x_plt.append(epoch + 1)
+            valid_loss_y_plt.append(sum(swa_valid_loss) / len(swa_valid_loss))
+
+            swa_eval_metric = metric.compute()
+            logger.info(f"swa epoch {epoch}: {swa_eval_metric}")
+                
+        plt.figure(0)
+        lr_x_plt = torch.linspace(starting_epoch, epoch + 1, steps=len(lr_plt))
         plt.xlim(0, args.num_train_epochs)
         plt.ylim(-0.2 * args.learning_rate, 1.2 * args.learning_rate)
+        # print(lr_x_plt, lr_plt)
         plt.scatter(lr_x_plt, lr_plt, s=1)
         plt.savefig(os.path.join(args.output_dir, "lr.png"))
+
+        plt.figure(1)
+        plt.scatter(train_loss_x_plt, train_loss_y_plt, s=1, c='r', label='train')
+        plt.scatter(valid_loss_x_plt, valid_loss_y_plt, s=5, c='b', label='valid')
+        plt.legend()
+        plt.savefig(os.path.join(args.output_dir, "loss.png"))
+
+
+        with open(os.path.join(args.output_dir, "loss.json"), "w") as f:
+            Dict = {}
+            Dict['train_loss'] = train_loss_y_plt
+            Dict['valid_loss'] = valid_loss_y_plt
+            obj_str1 = json.dumps(Dict)
+            f.write(f'{obj_str1}\n')
+        with open(os.path.join(args.output_dir, "acc.txt"), "a") as f:
+            f.write(f"epoch {epoch}: {eval_metric}\n")
 
     total_flop = sum(p.numel() for p in model.parameters())
     total_flop_learn = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -843,6 +989,7 @@ def main():
             dict_time["time"] = nowtime
             obj_str3 = json.dumps(dict_time)
             f.write(f'{obj_str3}\n')
+
 
 
 
