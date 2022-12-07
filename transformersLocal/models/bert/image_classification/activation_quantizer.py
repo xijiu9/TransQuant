@@ -176,8 +176,17 @@ class SymLsqQuantizer(torch.autograd.Function):
         # grad_scale = 1.0
         ctx.save_for_backward(input, alpha)
         ctx.other = grad_scale, Qn, Qp, learnable, layerwise
-        q_w = (input / alpha).round().clamp(Qn, Qp)
-        w_q = q_w * alpha
+
+        if layerwise:
+            q_w = (input / alpha).round().clamp(Qn, Qp)
+        else:
+            print("183 input {} alpha {} ".format(input.shape, alpha.shape))
+            q_w = (input / alpha.unsqueeze(2)).round().clamp(Qn, Qp)
+
+        if layerwise:
+            w_q = q_w * alpha
+        else:
+            w_q = q_w * alpha.unsqueeze(2)
         return w_q
 
     @staticmethod
@@ -232,8 +241,16 @@ class AsymLsqQuantizer(torch.autograd.Function):
         # grad_scale = 1.0
         ctx.save_for_backward(input_, alpha)
         ctx.other = grad_scale, Qn, Qp, learnable, layerwise
-        q_w = (input_ / alpha).round().clamp(Qn, Qp)
-        w_q = q_w * alpha
+
+        if layerwise:
+            q_w = (input_ / alpha).round().clamp(Qn, Qp)
+        else:
+            q_w = (input_ / alpha).round().clamp(Qn, Qp)
+
+        if layerwise:
+            w_q = q_w * alpha
+        else:
+            w_q = q_w * alpha
         w_q = w_q + min_val
         return w_q
 

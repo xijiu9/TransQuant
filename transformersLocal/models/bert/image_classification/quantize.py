@@ -353,7 +353,7 @@ class QLinear(nn.Linear):
                     torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
             else:
                 self.weight_clip_val = LsqStepSize(
-                    torch.ones_like(example_tensor).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+                    torch.ones_like(example).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
         else:
             self.register_buffer('weight_clip_val', None)
 
@@ -370,7 +370,7 @@ class QLinear(nn.Linear):
             else:
                 if len(example.shape):
                     self.input_clip_val = LsqStepSize(
-                        torch.ones_like(example_tensor).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+                        torch.ones_like(example).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
 
         else:
             self.register_buffer('input_clip_val', None)

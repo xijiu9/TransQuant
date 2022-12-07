@@ -215,7 +215,9 @@ class BertEmbeddings(nn.Module):
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
-        self.identity = builder.identity(name="embedding")
+        self.identity_i = builder.identity(name="embedding")
+        self.identity_t = builder.identity(name="embedding")
+        self.identity_p = builder.identity(name="embedding")
         self.builder = builder
         # self.linear = builder.linear(config.hidden_size, config.hidden_size)
 
@@ -265,18 +267,18 @@ class BertEmbeddings(nn.Module):
         if inputs_embeds is None:
             if self.builder.choice["embedding"]:
                 # 先经过全精度embedding层，再经过embed_dim * embed_dim全连接层
-                inputs_embeds = self.identity(self.word_embeddings(input_ids))
+                inputs_embeds = self.identity_i(self.word_embeddings(input_ids))
             else:
                 inputs_embeds = self.word_embeddings(input_ids)
         if self.builder.choice["embedding"]:
-            token_type_embeddings = self.identity(self.token_type_embeddings(token_type_ids))
+            token_type_embeddings = self.identity_t(self.token_type_embeddings(token_type_ids))
         else:
             token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
         embeddings = inputs_embeds + token_type_embeddings
         if self.position_embedding_type == "absolute":
             if self.builder.choice["embedding"]:
-                position_embeddings = self.identity(self.position_embeddings(position_ids))
+                position_embeddings = self.identity_p(self.position_embeddings(position_ids))
             else:
                 position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
