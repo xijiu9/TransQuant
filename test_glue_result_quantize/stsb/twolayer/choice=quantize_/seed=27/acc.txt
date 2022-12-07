@@ -1,9 +1,9 @@
-Time 2022/11/28 13:56:42:
+Time 2022/12/07 11:11:36:
 task_name stsb
 train_file None
 validation_file None
 max_length 128
-pad_to_max_length False
+pad_to_max_length True
 model_name_or_path bert-base-cased
 use_slow_tokenizer False
 per_device_train_batch_size 32
@@ -28,10 +28,16 @@ ignore_mismatched_sizes False
 arch BertForSequenceClassification
 model_config quantize
 choice ['quantize']
+clip_lr 2e-05
+clip_wd 0.0
 ACT2FN gelu
 SAQ False
 rho 0.5
 lmd 1.0
+swa False
+swa_start 6
+swa_lr 0.05
+swa_c_epochs 1
 qa True
 qw True
 qg True
@@ -49,9 +55,13 @@ twolayers_gradinputt True
 luq False
 weight_quant_method ptq
 input_quant_method ptq
+learnable True
+lsq_layerwise True
 cutood 0
 clip_value 100.0
 plt_debug False
-epoch 0: {'pearson': 0.8579718806450161, 'spearmanr': 0.8568822802117202}
-epoch 1: {'pearson': 0.8712841333826713, 'spearmanr': 0.8684504607723441}
-epoch 2: {'pearson': 0.875558577220358, 'spearmanr': 0.8738443844139849}
+change_type None
+change_threshold 0
+epoch 0: {'pearson': 0.8632135699647572, 'spearmanr': 0.8594086894240403}
+epoch 1: {'pearson': 0.871722924282201, 'spearmanr': 0.8695974231889038}
+epoch 2: {'pearson': 0.8747751553417404, 'spearmanr': 0.8726066593627296}

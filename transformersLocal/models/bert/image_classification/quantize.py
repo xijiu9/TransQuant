@@ -53,7 +53,7 @@ class QuantizationConfig:
         self.weight_quant_method = 'LSQ'
         self.input_quant_method = ''
         self.learnable = True
-        self.lsq_stepshape = 1
+        self.lsq_layerwise = True
 
         self.change_type = None
         self.change_threshold = 0

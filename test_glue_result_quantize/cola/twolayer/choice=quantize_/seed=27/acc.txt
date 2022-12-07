@@ -1,9 +1,9 @@
-Time 2022/12/07 10:41:42:
+Time 2022/12/07 11:08:09:
 task_name cola
 train_file None
 validation_file None
 max_length 128
-pad_to_max_length False
+pad_to_max_length True
 model_name_or_path bert-base-cased
 use_slow_tokenizer False
 per_device_train_batch_size 32
@@ -62,4 +62,8 @@ clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'matthews_correlation': 0.49149018389366794}
+epoch 1: {'matthews_correlation': 0.5469587051515413}
+epoch 2: {'matthews_correlation': 0.5784786967005595}
+epoch 0: {'matthews_correlation': 0.47750559698251505}
+epoch 1: {'matthews_correlation': 0.5468625515611443}
+epoch 2: {'matthews_correlation': 0.565965534490769}

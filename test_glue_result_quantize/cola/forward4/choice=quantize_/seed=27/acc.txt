@@ -1,16 +1,16 @@
-Time 2022/12/04 19:12:28:
+Time 2022/12/07 13:15:49:
 task_name cola
 train_file None
 validation_file None
 max_length 128
-pad_to_max_length False
+pad_to_max_length True
 model_name_or_path bert-base-cased
 use_slow_tokenizer False
-per_device_train_batch_size 64
+per_device_train_batch_size 32
 per_device_eval_batch_size 8
-learning_rate 4e-05
+learning_rate 2e-05
 weight_decay 0.0
-num_train_epochs 6
+num_train_epochs 3
 max_train_steps 804
 gradient_accumulation_steps 1
 lr_scheduler_type SchedulerType.LINEAR
@@ -28,7 +28,7 @@ ignore_mismatched_sizes False
 arch BertForSequenceClassification
 model_config quantize
 choice ['quantize']
-clip_lr 4e-05
+clip_lr 2e-05
 clip_wd 0.0
 ACT2FN gelu
 SAQ False
@@ -55,14 +55,13 @@ twolayers_gradinputt False
 luq False
 weight_quant_method lsq
 input_quant_method lsq
+learnable True
+lsq_layerwise True
 cutood 0
 clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'matthews_correlation': 0.0}
-epoch 1: {'matthews_correlation': 0.046743813109510104}
-epoch 2: {'matthews_correlation': 0.11239299208279856}
-epoch 3: {'matthews_correlation': 0.20334069594995052}
-epoch 4: {'matthews_correlation': 0.21895958523931583}
-epoch 5: {'matthews_correlation': 0.23339883669757286}
+epoch 0: {'matthews_correlation': 0.09758197481255393}
+epoch 1: {'matthews_correlation': 0.23566064936608122}
+epoch 2: {'matthews_correlation': 0.2861838840234212}

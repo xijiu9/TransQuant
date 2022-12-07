@@ -57,6 +57,7 @@ parser.add_argument('--clip_wd', default=0.0, type=float, help='weight decay for
 
 parser.add_argument("--resume_from_checkpoint", '--rfc', type=str, default=None, help="If the training should continue from a checkpoint folder.")
 parser.add_argument("--checkpointing_steps", '--cs', type=str, default=None, help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",)
+parser.add_argument("--pad_to_max_length", action="store_true", help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.")
 
 parser.add_argument("--change_type", type=str, default=None, help="of every n steps, or 'epoch' for each epoch.",)
 parser.add_argument("--change_threshold", type=float, default=0, help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",)
@@ -137,6 +138,11 @@ change_bit = ''
 if args.change_type and args.change_threshold > 0:
     change_bit = '--change_type {} --change_threshold {}'.format(args.change_type, args.change_threshold)
 
+if args.pad_to_max_length:
+    pad_to_max_length = "--pad_to_max_length "
+else:
+    pad_to_max_length = ''
+
 def op_None(x):
     return "None" if x is None else x
 os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased --task_name {} --max_length 128 "
@@ -144,15 +150,17 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
           "--output_dir {} --arch BertForSequenceClassification {} --choice {} "
           "--bbits {} --bwbits {} --abits {} --wbits {} "
           "--2gw {} --2gi {} --luq {} "
-          "--weight_quant_method {} --input_quant_method {} --learnable {} --lsq_layerwise {} "
+          "--weight_quant_method {} --input_quant_method {} "
           " --cutood {} --clip-value {} --ACT2FN {} "
           "--plt-debug {} --swa {} --SAQ {} --rho {} --lmd {} "
-          "--clip_lr {} --clip_wd {} {} {} {}"
+          "--clip_lr {} --clip_wd {} {} {} {} "
+          "{} --learnable {} --lsq_layerwise {} "
           .format(args.task, args.per_device_train_batch_size, args.lr, args.seed, args.epochs,
                   output_dir, arg, argchoice,
                   bbits, bwbits, abits, wbits,
                   args.twolayers_gradweight, args.twolayers_gradinputt, args.luq,
-                  args.weight_quant_method, args.input_quant_method, args.learnable, args.lsq_layerwise,
+                  args.weight_quant_method, args.input_quant_method,
                   args.cutood, args.clip_value, args.ACT2FN,
                   args.plt_debug, args.swa, args.SAQ, args.rho, args.lmd,
-                  args.clip_lr, args.clip_wd, checkpointing_steps, resume_from_checkpoint, change_bit))
+                  args.clip_lr, args.clip_wd, checkpointing_steps, resume_from_checkpoint, change_bit,
+                  pad_to_max_length, args.learnable, args.lsq_layerwise))
