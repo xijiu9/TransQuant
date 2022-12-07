@@ -1,4 +1,4 @@
-Time 2022/11/28 13:58:23:
+Time 2022/12/07 10:38:34:
 task_name rte
 train_file None
 validation_file None
@@ -28,10 +28,16 @@ ignore_mismatched_sizes False
 arch BertForSequenceClassification
 model_config quantize
 choice ['quantize']
+clip_lr 2e-05
+clip_wd 0.0
 ACT2FN gelu
 SAQ False
 rho 0.5
 lmd 1.0
+swa False
+swa_start 6
+swa_lr 0.05
+swa_c_epochs 1
 qa True
 qw True
 qg True
@@ -49,9 +55,13 @@ twolayers_gradinputt True
 luq False
 weight_quant_method ptq
 input_quant_method ptq
+learnable True
+lsq_layerwise True
 cutood 0
 clip_value 100.0
 plt_debug False
+change_type None
+change_threshold 0
 epoch 0: {'accuracy': 0.5812274368231047}
 epoch 1: {'accuracy': 0.6209386281588448}
 epoch 2: {'accuracy': 0.6353790613718412}

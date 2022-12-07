@@ -328,7 +328,6 @@ def main():
     qconfig.weight_quant_method = args.weight_quant_method
     qconfig.input_quant_method = args.input_quant_method
     qconfig.learnable = args.learnable
-    qconfig.lsq_layerwise = lsq_layerwise
     if args.lsq_layerwise:
         qconfig.lsq_stepshape = [args.per_device_train_batch_size, args.max_length]
 
