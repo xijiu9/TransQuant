@@ -1,4 +1,4 @@
-Time 2022/12/07 13:15:49:
+Time 2022/12/07 13:59:14:
 task_name cola
 train_file None
 validation_file None
@@ -62,6 +62,6 @@ clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'matthews_correlation': 0.09758197481255393}
-epoch 1: {'matthews_correlation': 0.23566064936608122}
-epoch 2: {'matthews_correlation': 0.2861838840234212}
+epoch 0: {'matthews_correlation': 0.0463559874942472}
+epoch 1: {'matthews_correlation': 0.20447908125390313}
+epoch 2: {'matthews_correlation': 0.21863385601884516}

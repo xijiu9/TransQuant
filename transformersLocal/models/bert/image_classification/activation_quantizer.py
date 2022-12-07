@@ -161,9 +161,6 @@ class SymLsqQuantizer(torch.autograd.Function):
         :param layerwise: rowwise quant
         :return: quantized output
         """
-        if not layerwise:
-            # TODO
-            raise NotImplementedError
         ctx.num_bits = num_bits
         if num_bits == 32:
             return input
@@ -171,14 +168,14 @@ class SymLsqQuantizer(torch.autograd.Function):
         Qn = -2 ** (num_bits - 1)
         Qp = 2 ** (num_bits - 1) - 1
 
-        assert alpha > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
-        if alpha.item() == 1.0 and (not alpha.initialized):
+        assert alpha.min() > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
+        if alpha.view(-1)[0] == 1.0 and (not alpha.initialized):
             alpha.initialize_wrapper(input, num_bits, symmetric=True, init_method='default', layerwise=layerwise)
 
         grad_scale = 1.0 / math.sqrt(input.numel() * Qp)
         # grad_scale = 1.0
         ctx.save_for_backward(input, alpha)
-        ctx.other = grad_scale, Qn, Qp, learnable
+        ctx.other = grad_scale, Qn, Qp, learnable, layerwise
         q_w = (input / alpha).round().clamp(Qn, Qp)
         w_q = q_w * alpha
         return w_q
@@ -189,7 +186,7 @@ class SymLsqQuantizer(torch.autograd.Function):
             return grad_output, None, None, None
 
         input_, alpha = ctx.saved_tensors
-        grad_scale, Qn, Qp, learnable = ctx.other
+        grad_scale, Qn, Qp, learnable, layerwise = ctx.other
         q_w = input_ / alpha
         indicate_small = (q_w < Qn).float()
         indicate_big = (q_w > Qp).float()
@@ -217,9 +214,6 @@ class AsymLsqQuantizer(torch.autograd.Function):
         :param layerwise: rowwise quant
         :return: quantized output
         """
-        if not layerwise:
-            # TODO
-            raise NotImplementedError
         ctx.num_bits = num_bits
         if num_bits == 32:
             return input
@@ -230,14 +224,14 @@ class AsymLsqQuantizer(torch.autograd.Function):
         min_val = input.min().item()
         input_ = input - min_val
 
-        assert alpha > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
-        if alpha.item() == 1.0 and (not alpha.initialized):
+        assert alpha.min() > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
+        if alpha.view(-1)[0] == 1.0 and (not alpha.initialized):
             alpha.initialize_wrapper(input, num_bits, symmetric=False, init_method='default', layerwise=layerwise)
 
         grad_scale = 1.0 / math.sqrt(input.numel() * Qp)
         # grad_scale = 1.0
         ctx.save_for_backward(input_, alpha)
-        ctx.other = grad_scale, Qn, Qp, learnable
+        ctx.other = grad_scale, Qn, Qp, learnable, layerwise
         q_w = (input_ / alpha).round().clamp(Qn, Qp)
         w_q = q_w * alpha
         w_q = w_q + min_val
@@ -249,7 +243,7 @@ class AsymLsqQuantizer(torch.autograd.Function):
             return grad_output, None, None, None
 
         input_, alpha = ctx.saved_tensors
-        grad_scale, Qn, Qp, learnable = ctx.other
+        grad_scale, Qn, Qp, learnable, layerwise = ctx.other
         q_w = input_ / alpha
         indicate_small = (q_w < Qn).float()
         indicate_big = (q_w > Qp).float()
@@ -283,11 +277,18 @@ class LsqStepSize(nn.Parameter):
             elif init_method == 'uniform':
                 init_val = 1./(2*Qp+1) if symmetric else 1./Qp
         else:
-            if init_method == 'default':
-                init_val = 2 * tensor.abs().mean(dim=(0, 1)) / math.sqrt(Qp) if symmetric \
-                    else 4 * tensor.abs().mean(dim=(0, 1)) / math.sqrt(Qp)
-            elif init_method == 'uniform':
-                init_val = 1./(2*Qp+1) if symmetric else 1./Qp
+            if len(tensor.shape) == 3:
+                if init_method == 'default':
+                    init_val = 2 * tensor.abs().mean(dim=2) / math.sqrt(Qp) if symmetric \
+                        else 4 * tensor.abs().mean(dim=2) / math.sqrt(Qp)
+                elif init_method == 'uniform':
+                    init_val = 1./(2*Qp+1) if symmetric else 1./Qp
+            if len(tensor.shape) == 2:
+                if init_method == 'default':
+                    init_val = 2 * tensor.abs().mean(dim=1) / math.sqrt(Qp) if symmetric \
+                        else 4 * tensor.abs().mean(dim=1) / math.sqrt(Qp)
+                elif init_method == 'uniform':
+                    init_val = 1./(2*Qp+1) if symmetric else 1./Qp
         self._initialize(init_val)
 
 
