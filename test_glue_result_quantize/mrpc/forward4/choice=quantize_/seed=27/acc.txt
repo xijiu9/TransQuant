@@ -1,4 +1,4 @@
-Time 2022/12/08 22:18:39:
+Time 2022/12/15 21:52:09:
 task_name mrpc
 train_file None
 validation_file None
@@ -56,7 +56,9 @@ luq False
 weight_quant_method lsq
 input_quant_method lsq
 learnable True
-lsq_layerwise True
+lsq_layerwise layer
+retain_large_value False
+quantize_large_value False
 cutood 0
 clip_value 100.0
 plt_debug False

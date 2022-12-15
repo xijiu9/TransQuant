@@ -1,4 +1,4 @@
-Time 2022/12/09 15:14:40:
+Time 2022/12/15 22:01:41:
 task_name mrpc
 train_file None
 validation_file None
@@ -54,9 +54,11 @@ twolayers_gradweight False
 twolayers_gradinputt False
 luq False
 weight_quant_method lsq
-input_quant_method lsq
+input_quant_method ptq
 learnable True
-lsq_layerwise True
+lsq_layerwise layer
+retain_large_value False
+quantize_large_value False
 cutood 0
 clip_value 100.0
 plt_debug False
@@ -65,6 +67,6 @@ change_threshold 0
 kd False
 kd_path /
 weight_norm False
-epoch 0: {'accuracy': 0.803921568627451, 'f1': 0.8705501618122978}
-epoch 1: {'accuracy': 0.8333333333333334, 'f1': 0.8862876254180602}
-epoch 2: {'accuracy': 0.8357843137254902, 'f1': 0.882661996497373}
+epoch 0: {'accuracy': 0.7352941176470589, 'f1': 0.8312499999999999}
+epoch 1: {'accuracy': 0.8259803921568627, 'f1': 0.88107202680067}
+epoch 2: {'accuracy': 0.821078431372549, 'f1': 0.874354561101549}

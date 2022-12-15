@@ -22,7 +22,7 @@ parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, me
                     choices=['uniform', 'lsq', 'ptq'])
 parser.add_argument('--learnable', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
 parser.add_argument('--lsq_layerwise', type=str, default='layer',
-                    help='Debug to draw the variance and leverage score', choices=['layerwise', 'row', 'column'])
+                    help='Debug to draw the variance and leverage score', choices=['layer', 'row', 'column'])
 parser.add_argument('--retain_large_value', type=str2bool, default=False,
                     help='Debug to draw the variance and leverage score')
 parser.add_argument('--quantize_large_value', type=str2bool, default=False,
