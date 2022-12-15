@@ -1,4 +1,4 @@
-Time 2022/12/06 14:49:34:
+Time 2022/12/09 15:14:40:
 task_name mrpc
 train_file None
 validation_file None
@@ -56,11 +56,15 @@ luq False
 weight_quant_method lsq
 input_quant_method lsq
 learnable True
+lsq_layerwise True
 cutood 0
 clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'accuracy': 0.7794117647058824, 'f1': 0.8571428571428572}
-epoch 1: {'accuracy': 0.8186274509803921, 'f1': 0.8754208754208753}
-epoch 2: {'accuracy': 0.8455882352941176, 'f1': 0.8904347826086957}
+kd False
+kd_path /
+weight_norm False
+epoch 0: {'accuracy': 0.803921568627451, 'f1': 0.8705501618122978}
+epoch 1: {'accuracy': 0.8333333333333334, 'f1': 0.8862876254180602}
+epoch 2: {'accuracy': 0.8357843137254902, 'f1': 0.882661996497373}

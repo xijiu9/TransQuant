@@ -53,7 +53,9 @@ class QuantizationConfig:
         self.weight_quant_method = 'LSQ'
         self.input_quant_method = ''
         self.learnable = True
-        self.lsq_layerwise = True
+        self.lsq_layerwise = 'layer'
+        self.retain_large_value = False
+        self.quantize_large_value = False
 
         self.change_type = None
         self.change_threshold = 0
@@ -63,8 +65,11 @@ class QuantizationConfig:
         return lambda x: ScalarPreconditionerAct(x, self.activation_num_bits)
         # return lambda x: ScalarPreconditioner(x, 16)
 
-    def weight_preconditioner(self):
-        return lambda x: ScalarPreconditioner(x, self.weight_num_bits)
+    def weight_preconditioner(self, special_bit=0):
+        if special_bit == 0:
+            return lambda x: ScalarPreconditioner(x, self.weight_num_bits)
+        else:
+            return lambda x: ScalarPreconditioner(x, special_bit)
         # return lambda x: ForwardPreconditioner(x, self.weight_num_bits)
         # return lambda x: DiagonalPreconditioner(x, self.weight_num_bits)
 
@@ -348,12 +353,15 @@ class QLinear(nn.Linear):
         elif quant_method == 'lsq' or qconfig.change_type:
             # TODO: for now we abuse the name for consistent reference in learner.
             # assert learnable, 'LSQ must use leranable step size!'
-            if qconfig.lsq_layerwise:
+            if qconfig.lsq_layerwise == 'layer':
                 self.weight_clip_val = LsqStepSize(
                     torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
-            else:
+            elif qconfig.lsq_layerwise == 'row':
                 self.weight_clip_val = LsqStepSize(
-                    torch.ones_like(example).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+                    torch.ones_like(example[:, 0]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+            elif qconfig.lsq_layerwise == 'column':
+                self.weight_clip_val = LsqStepSize(
+                    torch.ones_like(example[0, :]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
         else:
             self.register_buffer('weight_clip_val', None)
 
@@ -364,13 +372,23 @@ class QLinear(nn.Linear):
         elif quant_method == 'lsq' or qconfig.change_type:
             # TODO: for now we abuse the name for consistent reference in learner.
             # assert learnable, 'LSQ must use learnable step size!'
-            if qconfig.lsq_layerwise:
+            if qconfig.lsq_layerwise == 'layer':
                 self.input_clip_val = LsqStepSize(
                     torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
-            else:
-                if len(example.shape):
+            elif qconfig.lsq_layerwise == 'row':
+                if len(example.shape) == 3:
                     self.input_clip_val = LsqStepSize(
-                        torch.ones_like(example).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+                        torch.ones_like(example[:, :, 0]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+                if len(example.shape) == 2:
+                    self.input_clip_val = LsqStepSize(
+                        torch.ones_like(example[:, 0]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+            elif qconfig.lsq_layerwise == 'column':
+                if len(example.shape) == 3:
+                    self.input_clip_val = LsqStepSize(
+                        torch.ones_like(example[0, 0, :]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+                if len(example.shape) == 2:
+                    self.input_clip_val = LsqStepSize(
+                        torch.ones_like(example[0, :]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
 
         else:
             self.register_buffer('input_clip_val', None)
@@ -382,18 +400,32 @@ class QLinear(nn.Linear):
         self.is_second = True
 
     def forward(self, input):
+        if qconfig.retain_large_value:
+            input_origin = input.clone()
+
+            if self.name != 'addNorm_nsy':
+                input_sort = torch.sort(input.detach().flatten())[0].detach()
+                max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
+            else:
+                max_thres, min_thres = torch.zeros_like(input_origin.min()), input_origin.min()
+            input = torch.clamp(input, min_thres, max_thres)
+            input_large_value = input_origin - input
+
+            # print(max_thres, min_thres)
+
+
         if not self.first_pass:
             print("Actually Using QLinear!")
             self._build_weight_clip_val(qconfig.weight_quant_method, init_val=qconfig.clip_value, example=self.weight)
             self._build_input_clip_val(qconfig.input_quant_method, init_val=qconfig.clip_value, example=input)
             self.first_pass = True
 
-        if qconfig.cutood != 0:
-            input_sort = torch.sort(input.flatten())[0]
-            max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
-            input = torch.clamp(input, min_thres, max_thres)
-            # input[input > max_thres] = max_thres
-            # input[input < min_thres] = min_thres
+        # if qconfig.cutood != 0:
+        #     input_sort = torch.sort(input.flatten())[0]
+        #     max_thres, min_thres = input_sort[-len(input_sort) // qconfig.cutood], input_sort[len(input_sort) // qconfig.cutood]
+        #     input = torch.clamp(input, min_thres, max_thres)
+        #     # input[input > max_thres] = max_thres
+        #     # input[input < min_thres] = min_thres
 
         if qconfig.weight_quant_method == 'ptq':
             qweight = quantize(self.weight, qconfig.weight_preconditioner())
@@ -409,8 +441,9 @@ class QLinear(nn.Linear):
         if self.is_second:
             qweight = qweight + self.epsilon
 
-        if qconfig.input_quant_method == 'ptq':
+        if qconfig.input_quant_method == 'ptq' or (self.name == 'addNorm_nsy' and qconfig.retain_large_value):
             qinput = self.quantize_input(input)
+            # print(qinput.min())
         else:
             qinput = act_quant_fn(input, self.input_clip_val, num_bits=qconfig.activation_num_bits,
                                   symmetric=(self.name != 'addNorm_nsy'),
@@ -418,35 +451,70 @@ class QLinear(nn.Linear):
 
         qbias = self.bias
 
-        def draw(x, qx, s=''):
-            plt.figure()
-            num_bins = 256
-            n, bins, patches = plt.hist(x, num_bins, density=1, color='green')
-            # qn, _, _ = plt.hist(qx, num_bins, density=1 / 16, color='red')
-            for qxi in np.unique(qx):
-                plt.axvline(x=qxi, color='red', linestyle='--')
-            plt.xlabel('X-Axis')
-            plt.ylabel('Y-Axis')
-            plt.xlim([x.min() * 1.1, x.max() * 1.1])
-            plt.ylim([0, n.max() * 1.1])
-            plt.title("ratio={}\nmin={}\nmax={}".format(np.abs((x.min() / x.max())), x.min(), x.max()),
-                      fontweight="bold")
+        def draw(x, qx, s='', layerwise=True):
             time_tuple = time.localtime(time.time())
 
-            os.makedirs("plt/{}/{}".format(self.name, s), exist_ok=True)
-            plt.savefig('plt/{}/{}/{}:{}:{}.png'.format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5]))
-            plt.close()
+            if layerwise:
+                plt.figure()
+                num_bins = 256
+                n, bins, patches = plt.hist(x, num_bins, density=1, color='green')
+                # qn, _, _ = plt.hist(qx, num_bins, density=1 / 16, color='red')
+                qxx, countx = np.unique(qx, return_counts=True)
+                for qxi, counti in zip(qxx, countx):
+                    if x.max() >= qxi >= x.min():
+                        # print("draw a line of {}, {}, {}, {}".format(qxi, counti, x.max(), x.min()))
+                        plt.axvline(x=qxi, ymax=counti / countx.max() * n.max(), color='red', linewidth=1)
+                plt.xlabel('X-Axis')
+                plt.ylabel('Y-Axis')
+                plt.xlim([x.min() * 1.1, x.max() * 1.1])
+                plt.ylim([0, n.max() * 1.1])
+                plt.title("ratio={}\nmin={}\nmax={}".format(np.abs((x.min() / x.max())), x.min(), x.max()),
+                          fontweight="bold")
 
-            f = open('plt/{}/{}/{}:{}:{}.txt'.format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5]), 'a')
-            # f.write('{}\n{}\n{}\n{}\n'.format(x, qx, n, qn))
-            f.write('{}\n{}\n{}\n{}\n'.format(x, qx, n, np.unique(qx)))
-            f.close()
+                os.makedirs("plt/{}/{}".format(self.name, s), exist_ok=True)
+                plt.savefig('plt/{}/{}/{}:{}:{}.png'.format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5]))
+                plt.close()
+            else:
+                for num in range(x.shape[0]):
+                    # print(x[num].shape)
+                    plt.figure()
+                    num_bins = 256
+                    n, bins, patches = plt.hist(x[:, num], num_bins, density=1, color='green')
+                    # qn, _, _ = plt.hist(qx, num_bins, density=1 / 16, color='red')
+                    qxx, countx = np.unique(qx[:, num], return_counts=True)
+                    for qxi, counti in zip(qxx, countx):
+                        plt.axvline(x=qxi, ymax=counti / len(qx[:, num]) * n.max(), color='red', linewidth=1)
+                    plt.xlabel('X-Axis')
+                    plt.ylabel('Y-Axis')
+                    plt.xlim([x[:, num].min() * 1.1, x[:, num].max() * 1.1])
+                    plt.ylim([0, n.max() * 1.1])
+                    plt.title("{}\nratio={}\nmin={}\nmax={}".format(self.name, np.abs((x[:, num].min() / x[:, num].max())), x[:, num].min(), x[:, num].max()),
+                              fontweight="bold")
+
+                    os.makedirs("plt/{}/{}/{}:{}:{}".format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5]), exist_ok=True)
+                    plt.savefig('plt/{}/{}/{}:{}:{}/{}.png'.format(self.name, s, time_tuple[3], time_tuple[4], time_tuple[5], num))
+                    plt.close()
 
         # with torch.no_grad():
-        #     if torch.rand(1) < 0.001:
-        #         draw(input.view(-1).detach().cpu().numpy(), qinput.view(-1).detach().cpu().numpy(), 'input')
+        #     if torch.rand(1) < 0.005:
+        #         input_plt = input.clone().reshape(-1, input.shape[-1]).detach()
+        #         qinput_plt = qinput.clone().reshape(-1, qinput.shape[-1]).detach()
+        #
+        #         # draw(input_plt.detach().cpu().numpy(), qinput_plt.detach().cpu().numpy(), 'input', layerwise=False)
+        #         # draw(self.weight.detach().cpu().numpy(), qweight.detach().cpu().numpy(), 'weight', layerwise=False)
+        #
+        #         draw(input_plt.view(-1).detach().cpu().numpy(), qinput_plt.view(-1).detach().cpu().numpy(), 'input')
         #         draw(self.weight.view(-1).detach().cpu().numpy(), qweight.view(-1).detach().cpu().numpy(), 'weight')
         #         print("saved!")
+        #         # exit(0)
+
+        if qconfig.retain_large_value:
+            if qconfig.quantize_large_value:
+                qinput_large_value = quantize(input_large_value, qconfig.weight_preconditioner(qconfig.activation_num_bits))
+                # print(qinput_large_value.max(), qinput_large_value.min(), input_large_value.max(), input_large_value.min())
+            else:
+                qinput_large_value = input_large_value
+            qinput = qinput + qinput_large_value
 
         if hasattr(self, 'exact') or not qconfig.quantize_gradient:
             output = F.linear(qinput, qweight, qbias)
@@ -475,12 +543,15 @@ class QIdentity(nn.Identity):
         elif quant_method == 'lsq' or qconfig.change_type:
             # TODO: for now we abuse the name for consistent reference in learner.
             # assert learnable, 'LSQ must use learnable step size!'
-            if qconfig.lsq_layerwise:
+            if qconfig.lsq_layerwise == 'layer':
                 self.embed_clip_val = LsqStepSize(
                     torch.tensor(1.0, requires_grad=qconfig.learnable))  # stepsize will be initialized in the first quantization
-            else:
+            elif qconfig.lsq_layerwise == 'row':
                 self.embed_clip_val = LsqStepSize(
                     torch.ones_like(example[:, :, 0]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
+            elif qconfig.lsq_layerwise == 'column':
+                self.embed_clip_val = LsqStepSize(
+                    torch.ones_like(example[0, 0, :]).clone().detach().requires_grad_(qconfig.learnable))  # stepsize will be initialized in the first quantization
 
         else:
             self.register_buffer('embed_clip_val', None)
@@ -490,7 +561,7 @@ class QIdentity(nn.Identity):
             print("Actually Using QIdentity!")
             self._build_embed_clip_val(qconfig.weight_quant_method, init_val=qconfig.clip_value, example=input)
             self.first_pass = True
-            torch.set_printoptions(precision=10)
+            # torch.set_printoptions(precision=10)
         # print(self.embed_clip_val)
         if qconfig.weight_quant_method == 'ptq':
             qinput = quantize(input, qconfig.weight_preconditioner())

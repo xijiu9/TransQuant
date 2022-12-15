@@ -84,7 +84,10 @@ class ScalarPreconditioner(Preconditioner):
 
         qzero = -self.zero_point * self.scale
         iqzero = torch.floor(qzero)
-        mx = (iqzero - self.num_bins) * mn / iqzero
+        if iqzero > 0:
+            mx = (iqzero - self.num_bins) * mn / iqzero
+        elif iqzero == 0:
+            self.zero_point1, mn = 0, 0
         self.scale = self.num_bins / (mx - mn)
 
         return (x - self.zero_point) * self.scale

@@ -22,6 +22,7 @@ import random
 from pathlib import Path
 import time
 
+from copy import deepcopy
 import evaluate
 import datasets
 import torch
@@ -66,7 +67,6 @@ try:
     from apex import amp
 except ImportError:
     raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
-
 
 logger = get_logger(__name__)
 
@@ -207,23 +207,23 @@ def parse_args():
         help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
     )
 
-    #Todo:添加的任务所需参数
+    # Todo:添加的任务所需参数
     model_names = bertmodels.bert_versions.keys()
     model_configs = bertmodels.bert_configs.keys()
 
     parser.add_argument('--arch', '-a', metavar='ARCH', default='bertForSequence',
                         choices=model_names,
                         help='model architecture: ' +
-                        ' | '.join(model_names) +
-                        ' (default: bertForSequence)')
+                             ' | '.join(model_names) +
+                             ' (default: bertForSequence)')
 
     parser.add_argument('--model-config', '-c', metavar='CONF', default='classic',
                         choices=model_configs,
                         help='model configs: ' +
-                        ' | '.join(model_configs) + '(default: classic)')
+                             ' | '.join(model_configs) + '(default: classic)')
 
-    #选择哪个层进行量化
-    #classic(都不量化), embedding(填充层), attention, addNorm, feedForward, pooler, classifier, linear(量化全部线性层), quantize(以上所有)
+    # 选择哪个层进行量化
+    # classic(都不量化), embedding(填充层), attention, addNorm, feedForward, pooler, classifier, linear(量化全部线性层), quantize(以上所有)
 
     parser.add_argument('--choice', nargs='+', type=str, help='Choose a linear layer to quantize')
     parser.add_argument('--clip_lr', default=2e-4, type=float, help='Use a seperate lr for clip_vals / stepsize')
@@ -241,6 +241,7 @@ def parse_args():
             return False
         else:
             raise argparse.ArgumentTypeError('Boolean value expected.')
+
     parser.add_argument('--SAQ', type=str2bool, default=False, help="Whether using SAQ")
     parser.add_argument("--rho", type=float, default=0.5, help="rho in SAM")
     parser.add_argument("--lmd", type=float, default=1, help="lambda in SAM")
@@ -273,18 +274,31 @@ def parse_args():
                         choices=['uniform', 'lsq', 'ptq'])
     parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, metavar='strategy',
                         choices=['uniform', 'lsq', 'ptq'])
-    parser.add_argument('--learnable', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
-    parser.add_argument('--lsq_layerwise', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
+    parser.add_argument('--learnable', type=str2bool, default=True,
+                        help='Debug to draw the variance and leverage score')
+    parser.add_argument('--lsq_layerwise', type=str, default='layer',
+                        help='Debug to draw the variance and leverage score', choices=['layerwise', 'row', 'column'])
+    parser.add_argument('--retain_large_value', type=str2bool, default=False,
+                        help='Debug to draw the variance and leverage score')
+    parser.add_argument('--quantize_large_value', type=str2bool, default=False,
+                        help='Debug to draw the variance and leverage score')
 
     parser.add_argument('--cutood', type=int, default=0, help='Choose a linear layer to quantize')
     parser.add_argument('--clip-value', type=float, default=100, help='Choose a linear layer to quantize')
-    parser.add_argument('--plt-debug', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
+    parser.add_argument('--plt-debug', type=str2bool, default=False,
+                        help='Debug to draw the variance and leverage score')
 
     parser.add_argument("--change_type", type=str, default=None, help="of every n steps, or 'epoch' for each epoch.", )
     parser.add_argument("--change_threshold", type=float, default=0,
                         help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.", )
 
-    #Todo:添加参数部分到此结束
+    parser.add_argument('--kd', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
+    parser.add_argument('--kd_path', type=str, default='/', help='Debug to draw the variance and leverage score')
+
+    parser.add_argument('--weight_norm', type=str2bool, default=False,
+                        help='Debug to draw the variance and leverage score')
+
+    # Todo:添加参数部分到此结束
     args = parser.parse_args()
 
     # Sanity checks
@@ -303,37 +317,11 @@ def parse_args():
 
     return args
 
+
 def main():
     args = parse_args()
-    #TODO:add something
-    qconfig.quantize_activation = args.qa
-    qconfig.quantize_weights = args.qw
-    qconfig.quantize_gradient = args.qg
-    qconfig.activation_num_bits = args.abits
-    qconfig.weight_num_bits = args.wbits
-    qconfig.bias_num_bits = args.biasbits
-    qconfig.backward_num_bits = args.bbits
-    qconfig.bweight_num_bits = args.bwbits
-    qconfig.backward_persample = args.persample
-    qconfig.hadamard = args.hadamard
-    qconfig.biased = args.biased
-    qconfig.biprecision = args.biprecision
-    qconfig.twolayers_gradweight = args.twolayers_gradweight
-    qconfig.twolayers_gradinputt = args.twolayers_gradinputt
-    qconfig.luq = args.luq
-    qconfig.cutood = args.cutood
-    qconfig.clip_value = args.clip_value
-    qconfig.choice = args.choice
 
-    qconfig.weight_quant_method = args.weight_quant_method
-    qconfig.input_quant_method = args.input_quant_method
-    qconfig.learnable = args.learnable
-    qconfig.lsq_layerwise = args.lsq_layerwise
-
-    qconfig.change_type = args.change_type
-    qconfig.change_threshold = args.change_threshold
-
-    #Todo:end of add something
+    # Todo:end of add something
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
     send_example_telemetry("test_glue", args)
@@ -439,35 +427,40 @@ def main():
     # elif args.task_name == "stsb":
     #     num_labels = 2
     print("num_labels is:", num_labels)
-    pretrainedConfig = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
-    config = transformersLocal.PretrainedConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
+    pretrainedConfig = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels,
+                                                  finetuning_task=args.task_name)
+    config = transformersLocal.PretrainedConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels,
+                                                                finetuning_task=args.task_name)
     config.classifier_dropout = pretrainedConfig.classifier_dropout
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=not args.use_slow_tokenizer)
-    #Todo:在training.py文件写完之后应用对应的模型
+    # Todo:在training.py文件写完之后应用对应的模型
 
-    PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(#Todo:修改模型
+    PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(  # Todo:修改模型
         args.model_name_or_path,
         from_tf=bool(".ckpt" in args.model_name_or_path),
         config=config,
         ignore_mismatched_sizes=args.ignore_mismatched_sizes,
     )
-    print("pretrainedModel.num_label is:",PreTrainedModel.num_labels)
+    print("pretrainedModel.num_label is:", PreTrainedModel.num_labels)
 
     pretrained_dict = PreTrainedModel.state_dict()
 
     print("*" * 100, args.choice, "*" * 100)
 
     config.hidden_act = args.ACT2FN
-    model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
-    print("model.num_label is:",model.num_labels)
+    model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config,
+                                                        weight_norm=args.weight_norm)
+    print("model.num_label is:", model.num_labels)
 
     model_dict = model.state_dict()
-    pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if (key in model_dict and 'classifier' not in key)}
+    pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if
+                            (key in model_dict and 'classifier' not in key)}
 
     model.load_state_dict(pretrained_dict_part, strict=False)
 
     if args.swa:
-        swa_model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice, bertConfig=config)
+        swa_model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, args.choice,
+                                                                bertConfig=config)
         swa_model = swa_model.to('cuda')
         swa_n = 0
     # Preprocessing the datasets
@@ -487,9 +480,9 @@ def main():
     # Some models have set the order of the labels to use, so let's make sure we do use it.
     label_to_id = None
     if (
-        model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
-        and args.task_name is not None
-        and not is_regression
+            model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
+            and args.task_name is not None
+            and not is_regression
     ):
         # Some have all caps in their config, some don't.
         label_name_to_id = {k.lower(): v for k, v in model.config.label2id.items()}
@@ -564,7 +557,6 @@ def main():
     )
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
-
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
@@ -574,10 +566,10 @@ def main():
         if 'clip_' in k:
             clip_params[k] = v
 
-
     optimizer_grouped_parameters = [
         {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and not 'clip_' in n],
+            "params": [p for n, p in model.named_parameters() if
+                       not any(nd in n for nd in no_decay) and not 'clip_' in n],
             "weight_decay": args.weight_decay,
         },
         {
@@ -679,6 +671,20 @@ def main():
     completed_steps = 0
     starting_epoch = 0
     # Potentially load in the weights and states from a previous save
+
+    if args.kd:
+        teacher_model = bertmodels.build_bert_for_sequencePrecision(args.arch, args.model_config, choice=["classic"],
+                                                                    bertConfig=config)
+        pretrained_dict = torch.load(os.path.join(args.kd_path, 'pytorch_model.bin'))
+        teacher_model_dict = teacher_model.state_dict()
+        pretrained_dict_part = {key: value for key, value in pretrained_dict.items() if
+                                (key in teacher_model_dict)}
+        teacher_model.load_state_dict(pretrained_dict_part, strict=False)
+        teacher_model = accelerator.prepare(teacher_model)
+
+        from torch.nn import MSELoss
+        loss_mse = MSELoss()
+
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint is not None or args.resume_from_checkpoint != "":
             accelerator.print(f"Resumed from checkpoint: {args.resume_from_checkpoint}")
@@ -712,6 +718,36 @@ def main():
     train_loss_y_plt = []
     valid_loss_x_plt = []
     valid_loss_y_plt = []
+
+    # TODO:add something
+    qconfig.quantize_activation = args.qa
+    qconfig.quantize_weights = args.qw
+    qconfig.quantize_gradient = args.qg
+    qconfig.activation_num_bits = args.abits
+    qconfig.weight_num_bits = args.wbits
+    qconfig.bias_num_bits = args.biasbits
+    qconfig.backward_num_bits = args.bbits
+    qconfig.bweight_num_bits = args.bwbits
+    qconfig.backward_persample = args.persample
+    qconfig.hadamard = args.hadamard
+    qconfig.biased = args.biased
+    qconfig.biprecision = args.biprecision
+    qconfig.twolayers_gradweight = args.twolayers_gradweight
+    qconfig.twolayers_gradinputt = args.twolayers_gradinputt
+    qconfig.luq = args.luq
+    qconfig.cutood = args.cutood
+    qconfig.clip_value = args.clip_value
+    qconfig.choice = args.choice
+
+    qconfig.weight_quant_method = args.weight_quant_method
+    qconfig.input_quant_method = args.input_quant_method
+    qconfig.learnable = args.learnable
+    qconfig.lsq_layerwise = args.lsq_layerwise
+    qconfig.retain_large_value = args.retain_large_value
+    qconfig.quantize_large_value = args.quantize_large_value
+
+    qconfig.change_type = args.change_type
+    qconfig.change_threshold = args.change_threshold
 
     for epoch in range(starting_epoch, args.num_train_epochs):
 
@@ -758,11 +794,11 @@ def main():
 
             print(len(FG), len(TG))
 
-            torch.save({"FG": FG, "TG": TG, "FG_grad": FG_grad, "TG_grad": TG_grad}, os.path.join(args.output_dir, '{}epoch.pt'.format(epoch)))
+            torch.save({"FG": FG, "TG": TG, "FG_grad": FG_grad, "TG_grad": TG_grad},
+                       os.path.join(args.output_dir, '{}epoch.pt'.format(epoch)))
             qconfig.quantize_gradient = args.qg
             optimizer.zero_grad()
             qconfig.grads = None
-
 
         print(model, file=open("model.txt", 'a'))
 
@@ -782,8 +818,10 @@ def main():
                     qconfig.quantize_activation, qconfig.quantize_weights, qconfig.quantize_gradient, \
                     qconfig.activation_num_bits, qconfig.weight_num_bits, \
                     qconfig.backward_num_bits, qconfig.bweight_num_bits = args.change_type[0], args.change_type[1], \
-                    args.change_type[2], int(args.change_type[3]), int(args.change_type[4]), \
-                    int(args.change_type[6]), int(args.change_type[5])
+                                                                          args.change_type[2], int(
+                        args.change_type[3]), int(args.change_type[4]), \
+                                                                          int(args.change_type[6]), int(
+                        args.change_type[5])
 
                     if qconfig.activation_num_bits == 8:
                         qconfig.input_quant_method = 'ptq'
@@ -796,8 +834,36 @@ def main():
 
                     print("make some changes!")
 
-            outputs = model(**batch)
-            loss = outputs.loss
+            outputs = model(**batch, output_attentions=args.kd, output_hidden_states=args.kd)
+            #
+            # print(outputs.keys())
+            # exit(0)
+            if args.kd:
+                with torch.no_grad():
+                    teacher_outputs = teacher_model(**batch, output_attentions=args.kd, output_hidden_states=args.kd)
+
+                att_loss = 0.
+                rep_loss = 0.
+
+                for student_att, teacher_att in zip(outputs["attentions"], teacher_outputs["attentions"]):
+                    student_att = torch.where(student_att <= -1e2,
+                                              torch.zeros_like(student_att).to("cuda"),
+                                              student_att)
+                    teacher_att = torch.where(teacher_att <= -1e2,
+                                              torch.zeros_like(teacher_att).to("cuda"),
+                                              teacher_att)
+
+                    tmp_loss = loss_mse(student_att, teacher_att)
+                    att_loss += tmp_loss
+
+                for student_rep, teacher_rep in zip(outputs["hidden_states"], teacher_outputs["hidden_states"]):
+                    tmp_loss = loss_mse(student_rep, teacher_rep)
+                    rep_loss += tmp_loss
+
+                loss = rep_loss + att_loss
+                loss += outputs.loss
+            else:
+                loss = outputs.loss
             # We keep track of the loss at each epoch
             if args.with_tracking:
                 total_loss += loss.detach().float()
@@ -827,7 +893,7 @@ def main():
 
             if isinstance(checkpointing_steps, int):
                 if completed_steps % checkpointing_steps == 0:
-                    output_dir = f"step_{completed_steps }"
+                    output_dir = f"step_{completed_steps}"
                     if args.output_dir is not None:
                         output_dir = os.path.join(args.output_dir, output_dir)
                     accelerator.save_state(output_dir)
@@ -859,8 +925,37 @@ def main():
         valid_loss_y_plt.append(sum(valid_loss) / len(valid_loss))
 
         eval_metric = metric.compute()
-        print("what the fuck")
-        logger.info(f"epoch {epoch}: {eval_metric}")
+        # print("what the fuck")
+        time_tuple = time.localtime(time.time())
+        logger.info(f"epoch {epoch}: {eval_metric}" +
+                    " Time {}/{:02d}/{:02d} {:02d}:{:02d}:{:02d}:".format(time_tuple[0], time_tuple[1], time_tuple[2],
+                                                                          time_tuple[3],
+                                                                          time_tuple[4], time_tuple[5]))
+
+        if args.kd:
+            teacher_model.eval()
+            teacher_samples_seen = 0
+            for step, batch in enumerate(eval_dataloader):
+                with torch.no_grad():
+                    teacher_outputs = teacher_model(**batch)
+                teacher_predictions = teacher_outputs.logits.argmax(
+                    dim=-1) if not is_regression else teacher_outputs.logits.squeeze()
+                teacher_predictions, teacher_references = accelerator.gather((teacher_predictions, batch["labels"]))
+                # If we are in a multiprocess environment, the last batch has duplicates
+                if accelerator.num_processes > 1:
+                    if step == len(eval_dataloader) - 1:
+                        teacher_predictions = teacher_predictions[: len(eval_dataloader.dataset) - teacher_samples_seen]
+                        teacher_references = teacher_references[: len(eval_dataloader.dataset) - teacher_samples_seen]
+                    else:
+                        teacher_samples_seen += teacher_references.shape[0]
+                metric.add_batch(
+                    predictions=teacher_predictions,
+                    references=teacher_references,
+                )
+
+            eval_metric = metric.compute()
+            # print("what the fuck")
+            logger.info(f"teacher model: {eval_metric}")
 
         if args.with_tracking:
             accelerator.log(
@@ -891,7 +986,6 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-
         if args.swa and (epoch + 1) >= args.swa_start and (epoch + 1 - args.swa_start) % args.swa_c_epochs == 0:
             moving_average(swa_model, model, 1.0 / (swa_n + 1))
             swa_n += 1
@@ -903,7 +997,8 @@ def main():
                 with torch.no_grad():
                     swa_outputs = swa_model(**batch)
                     swa_valid_loss.append(swa_outputs.loss.detach().cpu().numpy().item())
-                swa_predictions = swa_outputs.logits.argmax(dim=-1) if not is_regression else swa_outputs.logits.squeeze()
+                swa_predictions = swa_outputs.logits.argmax(
+                    dim=-1) if not is_regression else swa_outputs.logits.squeeze()
                 swa_predictions, references = accelerator.gather((swa_predictions, batch["labels"]))
                 # If we are in a multiprocess environment, the last batch has duplicates
                 if accelerator.num_processes > 1:
@@ -921,7 +1016,7 @@ def main():
 
             swa_eval_metric = metric.compute()
             logger.info(f"swa epoch {epoch}: {swa_eval_metric}")
-                
+
         plt.figure(0)
         lr_x_plt = torch.linspace(starting_epoch, epoch + 1, steps=len(lr_plt))
         plt.xlim(0, args.num_train_epochs)
@@ -935,7 +1030,6 @@ def main():
         plt.scatter(valid_loss_x_plt, valid_loss_y_plt, s=5, c='b', label='valid')
         plt.legend()
         plt.savefig(os.path.join(args.output_dir, "loss.png"))
-
 
         with open(os.path.join(args.output_dir, "loss.json"), "w") as f:
             Dict = {}
@@ -968,7 +1062,7 @@ def main():
         eval_metric = metric.compute()
         logger.info(f"mnli-mm: {eval_metric}")
 
-    #Todo:日志里添加训练时间以及模型本身大小
+    # Todo:日志里添加训练时间以及模型本身大小
     if args.output_dir is not None:
         with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
             end_time = time.time()
@@ -987,9 +1081,6 @@ def main():
             dict_time["time"] = nowtime
             obj_str3 = json.dumps(dict_time)
             f.write(f'{obj_str3}\n')
-
-
-
 
 
 if __name__ == "__main__":

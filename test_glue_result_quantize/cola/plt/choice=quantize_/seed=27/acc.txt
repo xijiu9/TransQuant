@@ -1,4 +1,4 @@
-Time 2022/12/06 14:49:08:
+Time 2022/12/10 20:39:08:
 task_name cola
 train_file None
 validation_file None
@@ -42,7 +42,7 @@ qa True
 qw True
 qg True
 biased False
-abits 8
+abits 3
 wbits 4
 biasbits 16
 bbits 8
@@ -54,13 +54,22 @@ twolayers_gradweight False
 twolayers_gradinputt False
 luq False
 weight_quant_method lsq
-input_quant_method lsq
+input_quant_method ptq
 learnable True
-cutood 0
+lsq_layerwise True
+retain_large_value True
+quantize_large_value False
+cutood 40
 clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'matthews_correlation': 0.41650989084940443}
-epoch 1: {'matthews_correlation': 0.4250687498762312}
-epoch 2: {'matthews_correlation': 0.4832593692802084}
+kd False
+kd_path /
+weight_norm False
+epoch 0: {'matthews_correlation': 0.45852531103874716}
+epoch 0: {'matthews_correlation': 0.018148342420931135}
+epoch 1: {'matthews_correlation': 0.4348340591340099}
+epoch 1: {'matthews_correlation': 0.1520718916597634}
+epoch 2: {'matthews_correlation': 0.5099519351292859}
+epoch 2: {'matthews_correlation': 0.32680474776600543}

@@ -182,9 +182,9 @@ def load_tf_weights_in_bert(model, config, tf_checkpoint_path):
 
 
 class BertBuilder(object):
-    def __init__(self, version, config, choice=None):
+    def __init__(self, version, config, choice=None, weight_norm=False):
         self.config = config
-
+        self.weight_norm = weight_norm
         self.choice = {
             'embedding': {"embedding", "quantize"} & set(choice),
             'attention': {"attention", "linear", "quantize"} & set(choice),
@@ -200,7 +200,13 @@ class BertBuilder(object):
             exit(0)
 
     def linear(self, in_planes, out_planes, name=''):
-        return self.config['linear'](in_planes, out_planes, name=name)
+        # print(self.weight_norm)
+        # exit(0)
+        if self.weight_norm:
+            from torch.nn.utils import weight_norm
+            return weight_norm(self.config['linear'](in_planes, out_planes, name=name))
+        else:
+            return self.config['linear'](in_planes, out_planes, name=name)
 
     def identity(self, name=''):
         return self.config['identity'](name=name)
@@ -1087,6 +1093,9 @@ class BertModel(BertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        # print(encoder_outputs)
+        # print("1091")
+        # exit(0)
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
@@ -1625,7 +1634,8 @@ class BertForSequenceClassification(BertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
+        # print(outputs.keys())
+        # exit(0)
         pooled_output = outputs[1]
 
         pooled_output = self.dropout(pooled_output)
@@ -2017,11 +2027,11 @@ def build_bert(version, config, bertConfig, model_state=None):
 
 
 # Todo:写一个BertForClassification的build函数，并应用到test_glue.py文件中去
-def build_bert_for_sequencePrecision(version, config, choice, bertConfig, model_state=None):
+def build_bert_for_sequencePrecision(version, config, choice, bertConfig, weight_norm=False):
     version = bert_versions[version]
     config = bert_configs[config]
 
-    builder = BertBuilder(version, config, choice)
+    builder = BertBuilder(version, config, choice, weight_norm=weight_norm)
     # choice = bert_choices[choice]
     print("Version: {}".format(version))
     print("Config: {}".format(config))

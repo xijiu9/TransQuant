@@ -1,4 +1,4 @@
-Time 2022/12/01 20:30:16:
+Time 2022/12/08 18:22:49:
 task_name rte
 train_file None
 validation_file None
@@ -55,9 +55,15 @@ twolayers_gradinputt False
 luq False
 weight_quant_method ptq
 input_quant_method ptq
+learnable True
+lsq_layerwise True
 cutood 0
 clip_value 100.0
 plt_debug False
-epoch 0: {'accuracy': 0.5740072202166066}
-epoch 1: {'accuracy': 0.628158844765343}
-epoch 2: {'accuracy': 0.6389891696750902}
+change_type None
+change_threshold 0
+kd True
+kd_path /workspace/home/xihaocheng20/TransQuant1207/TransQuant/test_glue_result_quantize/rte/all8bit/choice=classic_/seed=27/epoch_2
+epoch 0: {'accuracy': 0.6425992779783394}
+epoch 1: {'accuracy': 0.6389891696750902}
+epoch 2: {'accuracy': 0.6642599277978339}

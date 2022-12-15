@@ -1,9 +1,9 @@
-Time 2022/12/07 17:03:34:
+Time 2022/12/15 14:51:34:
 task_name rte
 train_file None
 validation_file None
 max_length 128
-pad_to_max_length True
+pad_to_max_length False
 model_name_or_path bert-base-cased
 use_slow_tokenizer False
 per_device_train_batch_size 32
@@ -56,9 +56,17 @@ luq False
 weight_quant_method lsq
 input_quant_method lsq
 learnable True
-lsq_layerwise False
+lsq_layerwise column
+retain_large_value False
+quantize_large_value False
 cutood 0
 clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
+kd False
+kd_path /
+weight_norm False
+epoch 0: {'accuracy': 0.48736462093862815}
+epoch 1: {'accuracy': 0.5595667870036101}
+epoch 2: {'accuracy': 0.592057761732852}

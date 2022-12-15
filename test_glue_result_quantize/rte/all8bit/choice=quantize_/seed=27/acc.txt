@@ -1,4 +1,4 @@
-Time 2022/12/07 10:32:38:
+Time 2022/12/08 23:13:12:
 task_name rte
 train_file None
 validation_file None
@@ -62,6 +62,9 @@ clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
+kd False
+kd_path /
+weight_norm False
 epoch 0: {'accuracy': 0.5812274368231047}
 epoch 1: {'accuracy': 0.5848375451263538}
 epoch 2: {'accuracy': 0.6137184115523465}

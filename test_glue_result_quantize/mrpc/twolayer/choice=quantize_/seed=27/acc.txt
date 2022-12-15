@@ -1,9 +1,9 @@
-Time 2022/12/07 14:13:03:
+Time 2022/12/08 19:22:32:
 task_name mrpc
 train_file None
 validation_file None
 max_length 128
-pad_to_max_length True
+pad_to_max_length False
 model_name_or_path bert-base-cased
 use_slow_tokenizer False
 per_device_train_batch_size 32
@@ -62,6 +62,11 @@ clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
+kd False
+kd_path /
 epoch 0: {'accuracy': 0.7156862745098039, 'f1': 0.8215384615384616}
+epoch 0: {'accuracy': 0.7254901960784313, 'f1': 0.831831831831832}
 epoch 1: {'accuracy': 0.8112745098039216, 'f1': 0.8710217755443886}
+epoch 1: {'accuracy': 0.8137254901960784, 'f1': 0.872053872053872}
 epoch 2: {'accuracy': 0.8186274509803921, 'f1': 0.8758389261744967}
+epoch 2: {'accuracy': 0.8455882352941176, 'f1': 0.8923076923076922}

@@ -37,9 +37,9 @@ class SymQuantizer(torch.autograd.Function):
             input = torch.where(input < clip_val[1], input, clip_val[1])
             input = torch.where(input > clip_val[0], input, clip_val[0])
             # NOTE: dynamic scaling (max_input).
-            if layerwise:
+            if layerwise == 'layer':
                 max_input = torch.max(torch.abs(input)).expand_as(input)
-            else:
+            elif layerwise == 'row':
                 if input.ndimension() <= 3:
                     # weight & hidden layer
                     max_input = torch.max(torch.abs(input), dim=-1, keepdim=True)[0].expand_as(input).detach()
@@ -98,12 +98,12 @@ class AsymQuantizer(torch.autograd.Function):
             input = torch.where(input < clip_val[1], input, clip_val[1])
             input = torch.where(input > clip_val[0], input, clip_val[0])
             # NOTE: dynamic scaling gives better performance than static
-            if layerwise:
+            if layerwise == 'layer':
                 alpha = (input.max() - input.min()).detach()
                 beta = input.min().detach()
                 # alpha = clip_val[1] - clip_val[0]
                 # beta = clip_val[0]
-            else:
+            elif layerwise == 'row':
                 if input.ndimension() <= 3:
                     # weight & hidden layer
                     alpha = (input.max(dim=-1, keepdim=True)[0] - input.min(dim=-1, keepdim=True)[0]).expand_as(
@@ -177,16 +177,32 @@ class SymLsqQuantizer(torch.autograd.Function):
         ctx.save_for_backward(input, alpha)
         ctx.other = grad_scale, Qn, Qp, learnable, layerwise
 
-        if layerwise:
+        if layerwise == 'layer':
             q_w = (input / alpha).round().clamp(Qn, Qp)
-        else:
-            print("183 input {} alpha {} ".format(input.shape, alpha.shape))
-            q_w = (input / alpha.unsqueeze(2)).round().clamp(Qn, Qp)
-
-        if layerwise:
+        elif layerwise == 'row':
+            # print("183 input {} alpha {} ".format(input.shape, alpha.shape))
+            if len(input.shape) == 3:
+                q_w = (input / alpha[:input.shape[0], :input.shape[1]].unsqueeze(2)).round().clamp(Qn, Qp)
+            elif len(input.shape) == 2:
+                q_w = (input / alpha[:input.shape[0]].unsqueeze(1)).round().clamp(Qn, Qp)
+        elif layerwise == 'column':
+            # print("183 input {} alpha {} ".format(input.shape, alpha.shape))
+            if len(input.shape) == 3:
+                q_w = (input / alpha[:input.shape[2]].unsqueeze(0).unsqueeze(0)).round().clamp(Qn, Qp)
+            elif len(input.shape) == 2:
+                q_w = (input / alpha[:input.shape[1]].unsqueeze(0)).round().clamp(Qn, Qp)
+        if layerwise == 'layer':
             w_q = q_w * alpha
-        else:
-            w_q = q_w * alpha.unsqueeze(2)
+        elif layerwise == 'row':
+            if len(input.shape) == 3:
+                w_q = q_w * alpha[:input.shape[0], :input.shape[1]].unsqueeze(2)
+            elif len(input.shape) == 2:
+                w_q = q_w * alpha[:input.shape[0]].unsqueeze(1)
+        elif layerwise == 'column':
+            if len(input.shape) == 3:
+                w_q = q_w * alpha[:input.shape[2]].unsqueeze(0).unsqueeze(0)
+            elif len(input.shape) == 2:
+                w_q = q_w * alpha[:input.shape[1]].unsqueeze(0)
         return w_q
 
     @staticmethod
@@ -196,16 +212,63 @@ class SymLsqQuantizer(torch.autograd.Function):
 
         input_, alpha = ctx.saved_tensors
         grad_scale, Qn, Qp, learnable, layerwise = ctx.other
-        q_w = input_ / alpha
+
+        if layerwise == 'layer':
+            q_w = input_ / alpha
+        elif layerwise == 'row':
+            if len(input_.shape) == 3:
+                q_w = input_ / alpha[:input_.shape[0], :input_.shape[1]].unsqueeze(2)
+            elif len(input_.shape) == 2:
+                q_w = input_ / alpha[:input_.shape[0]].unsqueeze(1)
+        elif layerwise == 'column':
+            if len(input_.shape) == 3:
+                q_w = input_ / alpha[:input_.shape[2]].unsqueeze(0).unsqueeze(0)
+            elif len(input_.shape) == 2:
+                q_w = input_ / alpha[:input_.shape[1]].unsqueeze(0)
+
         indicate_small = (q_w < Qn).float()
         indicate_big = (q_w > Qp).float()
         indicate_middle = 1.0 - indicate_small - indicate_big # this is more cpu-friendly than torch.ones(input_.shape)
-        grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
-                -q_w + q_w.round())) * grad_output * grad_scale).sum().unsqueeze(dim=0)
+
+        if layerwise == 'layer':
+            grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                    -q_w + q_w.round())) * grad_output * grad_scale).sum().unsqueeze(dim=0)
+        elif layerwise == 'row':
+            if len(input_.shape) == 3:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=2).unsqueeze(dim=0)
+            elif len(input_.shape) == 2:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=1).unsqueeze(dim=0)
+        elif layerwise == 'column':
+            if len(input_.shape) == 3:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=(0, 1)).unsqueeze(dim=0)
+            elif len(input_.shape) == 2:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=0).unsqueeze(dim=0)
+
+
         grad_input = indicate_middle * grad_output
 
+        grad_alpha_pad = torch.zeros_like(alpha)
+        if layerwise == 'layer':
+            grad_alpha_pad = grad_alpha
+        elif layerwise == 'row':
+            input_shape = input_.shape
+            if len(input_shape) == 3:
+                grad_alpha_pad[:grad_alpha.shape[1], :grad_alpha.shape[2]] = grad_alpha
+            if len(input_shape) == 2:
+                grad_alpha_pad[:grad_alpha.shape[1]] = grad_alpha
+        elif layerwise == 'column':
+            input_shape = input_.shape
+            if len(input_shape) == 3:
+                grad_alpha_pad[:grad_alpha.shape[1]] = grad_alpha
+            if len(input_shape) == 2:
+                grad_alpha_pad[:grad_alpha.shape[1]] = grad_alpha
+
         if learnable:
-            return grad_input, grad_alpha, None, None, None
+            return grad_input, grad_alpha_pad, None, None, None
         else:
             return grad_input, None, None, None, None
 
@@ -232,7 +295,7 @@ class AsymLsqQuantizer(torch.autograd.Function):
         # asymmetric: make sure input \in [0, +\inf], remember to add it back
         min_val = input.min().item()
         input_ = input - min_val
-
+        # print(alpha.min())
         assert alpha.min() > 0, 'alpha = {:.6f} becomes non-positive'.format(alpha)
         if alpha.view(-1)[0] == 1.0 and (not alpha.initialized):
             alpha.initialize_wrapper(input, num_bits, symmetric=False, init_method='default', layerwise=layerwise)
@@ -242,15 +305,31 @@ class AsymLsqQuantizer(torch.autograd.Function):
         ctx.save_for_backward(input_, alpha)
         ctx.other = grad_scale, Qn, Qp, learnable, layerwise
 
-        if layerwise:
+        if layerwise == 'layer':
             q_w = (input_ / alpha).round().clamp(Qn, Qp)
-        else:
-            q_w = (input_ / alpha).round().clamp(Qn, Qp)
+        elif layerwise == 'row':
+            if len(input.shape) == 3:
+                q_w = (input_ / alpha[:input_.shape[0], :input.shape[1]].unsqueeze(2)).round().clamp(Qn, Qp)
+            elif len(input.shape) == 2:
+                q_w = (input_ / alpha[:input_.shape[0]].unsqueeze(1)).round().clamp(Qn, Qp)
+        elif layerwise == 'column':
+            if len(input.shape) == 3:
+                q_w = (input_ / alpha[:input.shape[2]].unsqueeze(0).unsqueeze(0)).round().clamp(Qn, Qp)
+            elif len(input.shape) == 2:
+                q_w = (input_ / alpha[:input_.shape[1]].unsqueeze(0)).round().clamp(Qn, Qp)
 
-        if layerwise:
+        if layerwise == 'layer':
             w_q = q_w * alpha
-        else:
-            w_q = q_w * alpha
+        elif layerwise == 'row':
+            if len(input.shape) == 3:
+                w_q = q_w * alpha[:input_.shape[0], :input.shape[1]].unsqueeze(2)
+            elif len(input.shape) == 2:
+                w_q = q_w * alpha[:input_.shape[0]].unsqueeze(1)
+        elif layerwise == 'column':
+            if len(input.shape) == 3:
+                w_q = q_w * alpha[:input_.shape[2]].unsqueeze(0).unsqueeze(0)
+            elif len(input.shape) == 2:
+                w_q = q_w * alpha[:input_.shape[1]].unsqueeze(0)
         w_q = w_q + min_val
         return w_q
 
@@ -261,16 +340,64 @@ class AsymLsqQuantizer(torch.autograd.Function):
 
         input_, alpha = ctx.saved_tensors
         grad_scale, Qn, Qp, learnable, layerwise = ctx.other
-        q_w = input_ / alpha
+
+        if layerwise == 'layer':
+            q_w = input_ / alpha
+        elif layerwise == 'row':
+            if len(input_.shape) == 3:
+                q_w = input_ / alpha[:input_.shape[0], :input_.shape[1]].unsqueeze(2)
+            elif len(input_.shape) == 2:
+                q_w = input_ / alpha[:input_.shape[0]].unsqueeze(1)
+        elif layerwise == 'column':
+            if len(input_.shape) == 3:
+                q_w = input_ / alpha[:input_.shape[2]].unsqueeze(0).unsqueeze(0)
+            elif len(input_.shape) == 2:
+                q_w = input_ / alpha[:input_.shape[1]].unsqueeze(0)
+
+
         indicate_small = (q_w < Qn).float()
         indicate_big = (q_w > Qp).float()
         indicate_middle = 1.0 - indicate_small - indicate_big   # this is more cpu-friendly than torch.ones(input_.shape)
-        grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
-                -q_w + q_w.round())) * grad_output * grad_scale).sum().unsqueeze(dim=0)
+
+        if layerwise == 'layer':
+            grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                    -q_w + q_w.round())) * grad_output * grad_scale).sum().unsqueeze(dim=0)
+        elif layerwise == 'row':
+            if len(input_.shape) == 3:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=2).unsqueeze(dim=0)
+            elif len(input_.shape) == 2:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=2).unsqueeze(dim=0)
+        elif layerwise == 'column':
+            if len(input_.shape) == 3:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=(0, 1)).unsqueeze(dim=0)
+            elif len(input_.shape) == 2:
+                grad_alpha = ((indicate_small * Qn + indicate_big * Qp + indicate_middle * (
+                        -q_w + q_w.round())) * grad_output * grad_scale).sum(dim=0).unsqueeze(dim=0)
+
+
         grad_input = indicate_middle * grad_output
 
+        grad_alpha_pad = torch.zeros_like(alpha)
+        if layerwise == 'layer':
+            grad_alpha_pad = grad_alpha
+        elif layerwise == 'row':
+            input_shape = input_.shape
+            if len(input_shape) == 3:
+                grad_alpha_pad[:grad_alpha.shape[1], :grad_alpha.shape[2]] = grad_alpha
+            if len(input_shape) == 2:
+                grad_alpha_pad[:grad_alpha.shape[1]] = grad_alpha
+        elif layerwise == 'column':
+            input_shape = input_.shape
+            if len(input_shape) == 3:
+                grad_alpha_pad[:grad_alpha.shape[1]] = grad_alpha
+            if len(input_shape) == 2:
+                grad_alpha_pad[:grad_alpha.shape[1]] = grad_alpha
+
         if learnable:
-            return grad_input, grad_alpha, None, None, None
+            return grad_input, grad_alpha_pad, None, None, None
         else:
             return grad_input, None, None, None, None
 class LsqStepSize(nn.Parameter):
@@ -287,13 +414,13 @@ class LsqStepSize(nn.Parameter):
     def initialize_wrapper(self, tensor, num_bits, symmetric, init_method='default', layerwise=True):
         # input: everthing needed to initialize step_size
         Qp = 2 ** (num_bits - 1) - 1 if symmetric else 2 ** (num_bits) - 1
-        if layerwise:
+        if layerwise == 'layer':
             if init_method == 'default':
                 init_val = 2 * tensor.abs().mean() / math.sqrt(Qp) if symmetric \
                     else 4 * tensor.abs().mean() / math.sqrt(Qp)
             elif init_method == 'uniform':
                 init_val = 1./(2*Qp+1) if symmetric else 1./Qp
-        else:
+        elif layerwise == 'row':
             if len(tensor.shape) == 3:
                 if init_method == 'default':
                     init_val = 2 * tensor.abs().mean(dim=2) / math.sqrt(Qp) if symmetric \
@@ -306,6 +433,23 @@ class LsqStepSize(nn.Parameter):
                         else 4 * tensor.abs().mean(dim=1) / math.sqrt(Qp)
                 elif init_method == 'uniform':
                     init_val = 1./(2*Qp+1) if symmetric else 1./Qp
+        elif layerwise == 'column':
+            if len(tensor.shape) == 3:
+                if init_method == 'default':
+                    init_val = 2 * tensor.abs().mean(dim=(0, 1)) / math.sqrt(Qp) if symmetric \
+                        else 4 * tensor.abs().mean(dim=(0, 1)) / math.sqrt(Qp)
+                elif init_method == 'uniform':
+                    init_val = 1./(2*Qp+1) if symmetric else 1./Qp
+            if len(tensor.shape) == 2:
+                if init_method == 'default':
+                    init_val = 2 * tensor.abs().mean(dim=0) / math.sqrt(Qp) if symmetric \
+                        else 4 * tensor.abs().mean(dim=0) / math.sqrt(Qp)
+                elif init_method == 'uniform':
+                    init_val = 1./(2*Qp+1) if symmetric else 1./Qp
+
+        eps = 1e-10 * torch.ones_like(init_val)
+        init_val += eps
+        # print("361 tensor {} init val {} self.data {} ".format(tensor.shape, init_val.shape, self.data.shape))
         self._initialize(init_val)
 
 

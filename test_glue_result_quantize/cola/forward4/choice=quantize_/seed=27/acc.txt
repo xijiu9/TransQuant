@@ -1,9 +1,9 @@
-Time 2022/12/07 13:59:14:
+Time 2022/12/15 15:58:32:
 task_name cola
 train_file None
 validation_file None
 max_length 128
-pad_to_max_length True
+pad_to_max_length False
 model_name_or_path bert-base-cased
 use_slow_tokenizer False
 per_device_train_batch_size 32
@@ -56,12 +56,14 @@ luq False
 weight_quant_method lsq
 input_quant_method lsq
 learnable True
-lsq_layerwise True
+lsq_layerwise column
+retain_large_value False
+quantize_large_value False
 cutood 0
 clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'matthews_correlation': 0.0463559874942472}
-epoch 1: {'matthews_correlation': 0.20447908125390313}
-epoch 2: {'matthews_correlation': 0.21863385601884516}
+kd False
+kd_path /
+weight_norm False

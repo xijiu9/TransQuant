@@ -21,7 +21,11 @@ parser.add_argument('--weight_quant_method', '--wfq', default='ptq', type=str, m
 parser.add_argument('--input_quant_method', '--ifq', default='ptq', type=str, metavar='strategy',
                     choices=['uniform', 'lsq', 'ptq'])
 parser.add_argument('--learnable', type=str2bool, default=True, help='Debug to draw the variance and leverage score')
-parser.add_argument('--lsq_layerwise', type=str2bool, default=True,
+parser.add_argument('--lsq_layerwise', type=str, default='layer',
+                    help='Debug to draw the variance and leverage score', choices=['layerwise', 'row', 'column'])
+parser.add_argument('--retain_large_value', type=str2bool, default=False,
+                    help='Debug to draw the variance and leverage score')
+parser.add_argument('--quantize_large_value', type=str2bool, default=False,
                     help='Debug to draw the variance and leverage score')
 
 parser.add_argument('--ACT2FN', type=str, default='gelu', help='')
@@ -62,7 +66,10 @@ parser.add_argument("--pad_to_max_length", action="store_true", help="If passed,
 parser.add_argument("--change_type", type=str, default=None, help="of every n steps, or 'epoch' for each epoch.",)
 parser.add_argument("--change_threshold", type=float, default=0, help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",)
 
+parser.add_argument('--kd', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
+parser.add_argument('--kd_path', type=str, default='/', help='Debug to draw the variance and leverage score')
 
+parser.add_argument('--weight_norm', type=str2bool, default=False, help='Debug to draw the variance and leverage score')
 args = parser.parse_args()
 
 
@@ -154,7 +161,8 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
           " --cutood {} --clip-value {} --ACT2FN {} "
           "--plt-debug {} --swa {} --SAQ {} --rho {} --lmd {} "
           "--clip_lr {} --clip_wd {} {} {} {} "
-          "{} --learnable {} --lsq_layerwise {} "
+          "{} --learnable {} --lsq_layerwise {} --retain_large_value {} --quantize_large_value {} "
+          "--kd {} --kd_path {} --weight_norm {}"
           .format(args.task, args.per_device_train_batch_size, args.lr, args.seed, args.epochs,
                   output_dir, arg, argchoice,
                   bbits, bwbits, abits, wbits,
@@ -163,4 +171,5 @@ os.system("accelerate launch test_glue.py --model_name_or_path bert-base-cased -
                   args.cutood, args.clip_value, args.ACT2FN,
                   args.plt_debug, args.swa, args.SAQ, args.rho, args.lmd,
                   args.clip_lr, args.clip_wd, checkpointing_steps, resume_from_checkpoint, change_bit,
-                  pad_to_max_length, args.learnable, args.lsq_layerwise))
+                  pad_to_max_length, args.learnable, args.lsq_layerwise, args.retain_large_value, args.quantize_large_value,
+                  args.kd, args.kd_path, args.weight_norm))

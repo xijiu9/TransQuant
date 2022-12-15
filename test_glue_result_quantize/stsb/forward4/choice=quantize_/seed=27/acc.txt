@@ -1,4 +1,4 @@
-Time 2022/12/06 13:45:21:
+Time 2022/12/15 17:13:47:
 task_name stsb
 train_file None
 validation_file None
@@ -55,11 +55,18 @@ twolayers_gradinputt False
 luq False
 weight_quant_method lsq
 input_quant_method lsq
+learnable True
+lsq_layerwise column
+retain_large_value False
+quantize_large_value False
 cutood 0
 clip_value 100.0
 plt_debug False
 change_type None
 change_threshold 0
-epoch 0: {'pearson': 0.8024239492722858, 'spearmanr': 0.7964203318283916}
-epoch 1: {'pearson': 0.8308331860758524, 'spearmanr': 0.8294714382378272}
-epoch 2: {'pearson': 0.8365140537874659, 'spearmanr': 0.8346337567424289}
+kd False
+kd_path /
+weight_norm False
+epoch 0: {'pearson': 0.8156727736387441, 'spearmanr': 0.8084739451182109}
+epoch 1: {'pearson': 0.8323243598759188, 'spearmanr': 0.8282576863581527}
+epoch 2: {'pearson': 0.8399577745090324, 'spearmanr': 0.8346130182939718}
